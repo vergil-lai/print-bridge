@@ -12,6 +12,7 @@ import {
   Shuffle,
   Sun,
   Trash2,
+  X,
 } from '@lucide/vue';
 import { getVersion } from '@tauri-apps/api/app';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -37,6 +38,7 @@ import {
   type UpdateStatus,
 } from '@/updater';
 import type { Update } from '@tauri-apps/plugin-updater';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -321,6 +323,15 @@ function setRemoteNumber(
   const nextValue = Number(value);
   if (Number.isInteger(nextValue) && nextValue > 0) {
     config.value.remote[key] = nextValue;
+  }
+}
+
+/** 关闭顶部提示消息。 */
+function dismissMessage(kind: 'error' | 'success'): void {
+  if (kind === 'error') {
+    errorMessage.value = '';
+  } else {
+    successMessage.value = '';
   }
 }
 
@@ -703,19 +714,43 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <div v-if="errorMessage || successMessage" class="flex flex-col gap-2 text-sm">
-        <p
+      <div v-if="errorMessage || successMessage" class="grid gap-2 text-sm">
+        <Alert
           v-if="errorMessage"
-          class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive"
+          variant="error"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
         >
-          {{ errorMessage }}
-        </p>
-        <p
+          <AlertDescription class="min-w-0 break-words">
+            {{ errorMessage }}
+          </AlertDescription>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="shrink-0 text-destructive hover:bg-destructive/15 hover:text-destructive"
+            aria-label="关闭错误提示"
+            @click="dismissMessage('error')"
+          >
+            <X class="size-4" />
+          </Button>
+        </Alert>
+        <Alert
           v-if="successMessage"
-          class="rounded-md border bg-background px-3 py-2 text-muted-foreground"
+          variant="success"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
         >
-          {{ successMessage }}
-        </p>
+          <AlertDescription class="min-w-0 break-words">
+            {{ successMessage }}
+          </AlertDescription>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="shrink-0 text-emerald-800 hover:bg-emerald-500/15 hover:text-emerald-900 dark:text-emerald-200 dark:hover:text-emerald-100"
+            aria-label="关闭成功提示"
+            @click="dismissMessage('success')"
+          >
+            <X class="size-4" />
+          </Button>
+        </Alert>
       </div>
 
       <Card v-if="loadingConfig">
@@ -725,8 +760,9 @@ onBeforeUnmount(() => {
       </Card>
 
       <Tabs v-else-if="config" default-value="settings">
-        <TabsList class="grid w-full grid-cols-4 md:w-[480px]">
+        <TabsList class="grid w-full grid-cols-5 md:w-[600px]">
           <TabsTrigger value="settings"> 设置 </TabsTrigger>
+          <TabsTrigger value="remote"> 远程 </TabsTrigger>
           <TabsTrigger value="security"> 安全 </TabsTrigger>
           <TabsTrigger value="updates"> 关于 </TabsTrigger>
           <TabsTrigger value="logs"> 日志 </TabsTrigger>
@@ -860,8 +896,10 @@ onBeforeUnmount(() => {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
 
-          <Card class="mt-4">
+        <TabsContent value="remote" class="mt-2">
+          <Card>
             <CardHeader class="pb-3">
               <div class="flex items-center justify-between gap-3">
                 <CardTitle class="text-base"> 远程任务 </CardTitle>
@@ -869,15 +907,26 @@ onBeforeUnmount(() => {
               </div>
             </CardHeader>
             <CardContent class="grid gap-5">
-              <div class="grid gap-2">
-                <Label for="remote-url">任务 URL</Label>
-                <Input
-                  id="remote-url"
-                  type="url"
-                  placeholder="https://api.example.com/print-task"
-                  :model-value="config.remote.endpoint_url ?? ''"
-                  @update:model-value="setRemoteString('endpoint_url', $event)"
-                />
+              <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <div class="grid min-w-0 gap-2">
+                  <Label for="remote-url">任务 URL</Label>
+                  <Input
+                    id="remote-url"
+                    type="url"
+                    placeholder="https://api.example.com/print-task"
+                    :model-value="config.remote.endpoint_url ?? ''"
+                    @update:model-value="setRemoteString('endpoint_url', $event)"
+                  />
+                </div>
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="!config.remote.enabled || testingRemote"
+                  @click="handleTestRemoteConnection"
+                >
+                  <RefreshCw class="size-4" :class="{ 'animate-spin': testingRemote }" />
+                  {{ testingRemote ? '测试中' : '测试连接' }}
+                </Button>
               </div>
 
               <div class="grid gap-2">
@@ -943,17 +992,6 @@ onBeforeUnmount(() => {
                     @update:model-value="setRemoteNumber('max_report_retries', $event)"
                   />
                 </div>
-              </div>
-
-              <div class="flex justify-end">
-                <Button
-                  variant="outline"
-                  :disabled="!config.remote.enabled || testingRemote"
-                  @click="handleTestRemoteConnection"
-                >
-                  <RefreshCw class="size-4" :class="{ 'animate-spin': testingRemote }" />
-                  {{ testingRemote ? '测试中' : '测试连接' }}
-                </Button>
               </div>
             </CardContent>
           </Card>
