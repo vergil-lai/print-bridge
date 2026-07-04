@@ -42,7 +42,10 @@ async fn report_status_posts_event_and_accepts_any_2xx_status() {
         .unwrap();
     let request = server.request();
 
-    assert!(request.starts_with("post /print-task http/1.1"), "{request}");
+    assert!(
+        request.starts_with("post /print-task http/1.1"),
+        "{request}"
+    );
     assert!(request.contains("authorization: bearer secret-token"));
     assert!(request.contains(r#""event":"status""#));
     assert!(request.contains(r#""event_id":"event-001""#));

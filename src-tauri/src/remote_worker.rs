@@ -103,11 +103,11 @@ pub async fn poll_once(
                 }
                 if !new_jobs.is_empty() {
                     outcome.enqueued += new_jobs.len();
-                    state.queue.lock().await.accept_remote_batch(
-                        request_id,
-                        batch_id,
-                        new_jobs,
-                    )?;
+                    state
+                        .queue
+                        .lock()
+                        .await
+                        .accept_remote_batch(request_id, batch_id, new_jobs)?;
                     state.queue_notify.notify_one();
                 }
             }

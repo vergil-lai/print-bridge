@@ -15,14 +15,17 @@ use std::{
 
 #[tokio::test]
 async fn poll_once_enqueues_new_remote_jobs() {
-    let server = TestServer::start(response("200 OK", r#"{
+    let server = TestServer::start(response(
+        "200 OK",
+        r#"{
         "type": "print",
         "request_id": "REQ-001",
         "job_id": "JOB-001",
         "format": "pdf",
         "file_url": "https://example.com/label.pdf",
         "copies": 1
-    }"#));
+    }"#,
+    ));
     let state = state(server.url());
 
     let outcome = poll_once(&state, &RemoteClient::default()).await.unwrap();

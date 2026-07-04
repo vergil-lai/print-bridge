@@ -39,8 +39,9 @@ pub fn run() {
             let config_path = app_config_dir.join("config.json");
             let config = AgentConfig::load(&config_path)?;
             let printing = print_backend(app)?;
-            let remote_store = remote_store::RemoteStore::open(&app_config_dir.join("remote.sqlite3"))
-                .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+            let remote_store =
+                remote_store::RemoteStore::open(&app_config_dir.join("remote.sqlite3"))
+                    .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
             let state = AppState::with_config_path_and_printing(config, config_path, printing)
                 .with_remote_store(remote_store);
             let server_state = state.clone();
