@@ -1,0 +1,57 @@
+import { invoke } from '@tauri-apps/api/core';
+import type { AgentConfig, PaperInfo, PrinterInfo, TaskLogEntry } from '@/types';
+
+interface PapersResponse {
+  papers: PaperInfo[];
+  supports_custom: boolean;
+}
+
+/** 构造访问本地 Agent HTTP 服务的回环地址。 */
+function localUrl(port: number, path: string): string {
+  return `http://127.0.0.1:${port}${path}`;
+}
+
+/** 从本地服务读取 JSON，并把非 2xx 响应转成错误。 */
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+/** 通过 Tauri 读取已持久化的 Agent 配置。 */
+export function getConfig(): Promise<AgentConfig> {
+  return invoke<AgentConfig>('get_config');
+}
+
+/** 通过 Tauri 保存 Agent 配置。 */
+export function saveConfig(config: AgentConfig): Promise<AgentConfig> {
+  return invoke<AgentConfig>('save_config', { config });
+}
+
+/** 读取当前桌面应用是否为 debug 构建。 */
+export function isDebugBuild(): Promise<boolean> {
+  return invoke<boolean>('is_debug_build');
+}
+
+/** 读取本地 Agent 保留的最近任务日志。 */
+export function getLogs(): Promise<TaskLogEntry[]> {
+  return invoke<TaskLogEntry[]>('get_logs');
+}
+
+/** 从本地 HTTP 服务读取打印机列表。 */
+export function fetchPrinters(port: number): Promise<PrinterInfo[]> {
+  return fetchJson<PrinterInfo[]>(localUrl(port, '/printers'));
+}
+
+/** 从本地 HTTP 服务读取指定打印机的纸张尺寸。 */
+export async function fetchPapers(port: number, printerName: string): Promise<PaperInfo[]> {
+  const encodedPrinter = encodeURIComponent(printerName);
+  const response = await fetchJson<PapersResponse>(
+    localUrl(port, `/printers/${encodedPrinter}/papers`),
+  );
+
+  return response.papers;
+}

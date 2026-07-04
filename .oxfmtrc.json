@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "semi": true,
+  "singleQuote": true,
+  "tabWidth": 2,
+  "insertFinalNewline": true,
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "dist/**",
+    "src-tauri/**"
+  ]
+}
