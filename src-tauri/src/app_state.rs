@@ -5,6 +5,7 @@ use crate::{
     printing::{default_backend, PrintBackend},
     protocol::validate_origin,
     queue::QueueState,
+    remote_store::RemoteStore,
 };
 use std::{io, path::PathBuf, sync::Arc};
 use tokio::sync::{broadcast, Mutex, Notify, RwLock};
@@ -20,8 +21,10 @@ pub struct AppState {
     pub status_events: broadcast::Sender<TaskLogEntry>,
     pub queue: Arc<Mutex<QueueState>>,
     pub queue_notify: Arc<Notify>,
+    pub remote_notify: Arc<Notify>,
     pub print_lock: Arc<Mutex<()>>,
     pub printing: Arc<dyn PrintBackend + Send + Sync>,
+    pub remote_store: Option<Arc<RemoteStore>>,
 }
 
 impl AppState {
@@ -66,9 +69,17 @@ impl AppState {
             status_events,
             queue: Arc::new(Mutex::new(QueueState::default())),
             queue_notify: Arc::new(Notify::new()),
+            remote_notify: Arc::new(Notify::new()),
             print_lock: Arc::new(Mutex::new(())),
             printing: Arc::from(printing),
+            remote_store: None,
         }
+    }
+
+    /// 注入远程任务 SQLite 存储，供生产启动和相关测试使用。
+    pub fn with_remote_store(mut self, remote_store: RemoteStore) -> Self {
+        self.remote_store = Some(Arc::new(remote_store));
+        self
     }
 
     /// 校验、按需持久化并应用新配置。
@@ -84,6 +95,7 @@ impl AppState {
         }
 
         *self.config.write().await = config.clone();
+        self.remote_notify.notify_waiters();
         Ok(config)
     }
 

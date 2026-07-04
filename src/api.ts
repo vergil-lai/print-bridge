@@ -31,6 +31,11 @@ export function saveConfig(config: AgentConfig): Promise<AgentConfig> {
   return invoke<AgentConfig>('save_config', { config });
 }
 
+/** 使用当前远程任务配置执行连接测试。 */
+export function testRemoteConnection(config: AgentConfig): Promise<void> {
+  return invoke<void>('test_remote_connection', { config });
+}
+
 /** 读取当前桌面应用是否为 debug 构建。 */
 export function isDebugBuild(): Promise<boolean> {
   return invoke<boolean>('is_debug_build');

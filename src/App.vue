@@ -9,8 +9,10 @@ import {
   RefreshCw,
   RotateCw,
   Save,
+  Shuffle,
   Sun,
   Trash2,
+  X,
 } from '@lucide/vue';
 import { getVersion } from '@tauri-apps/api/app';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -23,6 +25,7 @@ import {
   isDebugBuild,
   printTestPage,
   saveConfig,
+  testRemoteConnection,
 } from '@/api';
 import type { AgentConfig, EffectivePaper, PaperInfo, PrinterInfo, TaskLogEntry } from '@/types';
 import {
@@ -35,6 +38,7 @@ import {
   type UpdateStatus,
 } from '@/updater';
 import type { Update } from '@tauri-apps/plugin-updater';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -65,6 +69,16 @@ const DEFAULT_PAPER: EffectivePaper = {
   width_mm: 60,
   height_mm: 40,
 };
+const DEFAULT_REMOTE_CONFIG: AgentConfig['remote'] = {
+  enabled: false,
+  endpoint_url: null,
+  bearer_token: null,
+  device_id: null,
+  device_name: null,
+  poll_interval_seconds: 10,
+  max_report_retries: 10,
+  history_retention_days: 3,
+};
 
 const GITHUB_REPOSITORY_URL = 'https://github.com/vergil-lai/print-bridge';
 const GITHUB_RELEASES_URL = 'https://github.com/vergil-lai/print-bridge/releases';
@@ -86,6 +100,7 @@ const loadingPapers = ref(false);
 const loadingLogs = ref(false);
 const saving = ref(false);
 const testingPrint = ref(false);
+const testingRemote = ref(false);
 const activePort = ref<number | null>(null);
 const appVersion = ref('-');
 const updateStatus = ref<UpdateStatus>('idle');
@@ -150,7 +165,6 @@ const canTestPrint = computed(
     Boolean(config.value?.printing.default_printer) &&
     Boolean(config.value?.printing.default_paper),
 );
-
 /** 默认打印机选择项的双向计算值。 */
 const selectedPrinter = computed({
   get: () => config.value?.printing.default_printer ?? '',
@@ -186,6 +200,10 @@ function normalizeConfig(value: AgentConfig): AgentConfig {
     printing: {
       ...value.printing,
       default_paper: value.printing.default_paper ?? { ...DEFAULT_PAPER },
+    },
+    remote: {
+      ...DEFAULT_REMOTE_CONFIG,
+      ...value.remote,
     },
   };
 }
@@ -286,6 +304,43 @@ function setPaperDimension(key: keyof EffectivePaper, value: string | number): v
   }
 }
 
+/** 更新远程任务配置中的可空字符串。 */
+function setRemoteString(
+  key: 'endpoint_url' | 'bearer_token' | 'device_id' | 'device_name',
+  value: string | number,
+): void {
+  if (!config.value) return;
+  const nextValue = String(value).trim();
+  config.value.remote[key] = nextValue || null;
+}
+
+/** 更新远程任务配置中的正整数。 */
+function setRemoteNumber(
+  key: 'poll_interval_seconds' | 'max_report_retries',
+  value: string | number,
+): void {
+  if (!config.value) return;
+  const nextValue = Number(value);
+  if (Number.isInteger(nextValue) && nextValue > 0) {
+    config.value.remote[key] = nextValue;
+  }
+}
+
+/** 关闭顶部提示消息。 */
+function dismissMessage(kind: 'error' | 'success'): void {
+  if (kind === 'error') {
+    errorMessage.value = '';
+  } else {
+    successMessage.value = '';
+  }
+}
+
+/** 为当前设备生成随机 UUID v4。 */
+function generateRemoteDeviceId(): void {
+  if (!config.value) return;
+  config.value.remote.device_id = crypto.randomUUID();
+}
+
 /** 加载配置、打印机、纸张和最近日志，初始化页面状态。 */
 async function loadConfig(): Promise<void> {
   loadingConfig.value = true;
@@ -371,6 +426,9 @@ async function persistConfig(): Promise<void> {
   try {
     const savedPort = config.value.service.port;
     const portChanged = activePort.value !== null && savedPort !== activePort.value;
+    if (config.value.remote.enabled) {
+      await testRemoteConnection(config.value);
+    }
     config.value = normalizeConfig(await saveConfig(config.value));
     if (portChanged) {
       if (await isDebugBuild()) {
@@ -386,6 +444,23 @@ async function persistConfig(): Promise<void> {
     errorMessage.value = error instanceof Error ? error.message : '保存或重启失败';
   } finally {
     saving.value = false;
+  }
+}
+
+/** 手动测试远程任务 URL 的 GET/POST 连通性。 */
+async function handleTestRemoteConnection(): Promise<void> {
+  if (!config.value || !config.value.remote.enabled) return;
+  testingRemote.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    await testRemoteConnection(config.value);
+    successMessage.value = '远程任务连接测试通过';
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '远程任务连接测试失败';
+  } finally {
+    testingRemote.value = false;
   }
 }
 
@@ -639,19 +714,43 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <div v-if="errorMessage || successMessage" class="flex flex-col gap-2 text-sm">
-        <p
+      <div v-if="errorMessage || successMessage" class="grid gap-2 text-sm">
+        <Alert
           v-if="errorMessage"
-          class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive"
+          variant="error"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
         >
-          {{ errorMessage }}
-        </p>
-        <p
+          <AlertDescription class="min-w-0 break-words">
+            {{ errorMessage }}
+          </AlertDescription>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="shrink-0 text-destructive hover:bg-destructive/15 hover:text-destructive"
+            aria-label="关闭错误提示"
+            @click="dismissMessage('error')"
+          >
+            <X class="size-4" />
+          </Button>
+        </Alert>
+        <Alert
           v-if="successMessage"
-          class="rounded-md border bg-background px-3 py-2 text-muted-foreground"
+          variant="success"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
         >
-          {{ successMessage }}
-        </p>
+          <AlertDescription class="min-w-0 break-words">
+            {{ successMessage }}
+          </AlertDescription>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="shrink-0 text-emerald-800 hover:bg-emerald-500/15 hover:text-emerald-900 dark:text-emerald-200 dark:hover:text-emerald-100"
+            aria-label="关闭成功提示"
+            @click="dismissMessage('success')"
+          >
+            <X class="size-4" />
+          </Button>
+        </Alert>
       </div>
 
       <Card v-if="loadingConfig">
@@ -661,8 +760,9 @@ onBeforeUnmount(() => {
       </Card>
 
       <Tabs v-else-if="config" default-value="settings">
-        <TabsList class="grid w-full grid-cols-4 md:w-[480px]">
+        <TabsList class="grid w-full grid-cols-5 md:w-[600px]">
           <TabsTrigger value="settings"> 设置 </TabsTrigger>
+          <TabsTrigger value="remote"> 远程 </TabsTrigger>
           <TabsTrigger value="security"> 安全 </TabsTrigger>
           <TabsTrigger value="updates"> 关于 </TabsTrigger>
           <TabsTrigger value="logs"> 日志 </TabsTrigger>
@@ -792,6 +892,105 @@ onBeforeUnmount(() => {
                     <p class="text-xs text-muted-foreground">启动系统后自动运行 PrintBridge</p>
                   </div>
                   <Switch id="autostart" v-model="config.app.autostart" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="remote" class="mt-2">
+          <Card>
+            <CardHeader class="pb-3">
+              <div class="flex items-center justify-between gap-3">
+                <CardTitle class="text-base"> 远程任务 </CardTitle>
+                <Switch id="remote-enabled" v-model="config.remote.enabled" />
+              </div>
+            </CardHeader>
+            <CardContent class="grid gap-5">
+              <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <div class="grid min-w-0 gap-2">
+                  <Label for="remote-url">任务 URL</Label>
+                  <Input
+                    id="remote-url"
+                    type="url"
+                    placeholder="https://api.example.com/print-task"
+                    :model-value="config.remote.endpoint_url ?? ''"
+                    @update:model-value="setRemoteString('endpoint_url', $event)"
+                  />
+                </div>
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="!config.remote.enabled || testingRemote"
+                  @click="handleTestRemoteConnection"
+                >
+                  <RefreshCw class="size-4" :class="{ 'animate-spin': testingRemote }" />
+                  {{ testingRemote ? '测试中' : '测试连接' }}
+                </Button>
+              </div>
+
+              <div class="grid gap-2">
+                <Label for="remote-token">Authorization Bearer Token</Label>
+                <Input
+                  id="remote-token"
+                  type="password"
+                  autocomplete="off"
+                  :model-value="config.remote.bearer_token ?? ''"
+                  @update:model-value="setRemoteString('bearer_token', $event)"
+                />
+              </div>
+
+              <div class="grid gap-4 md:grid-cols-2">
+                <div class="grid gap-2">
+                  <Label for="remote-device-id">Device ID</Label>
+                  <div class="flex gap-2">
+                    <Input
+                      id="remote-device-id"
+                      class="min-w-0 flex-1"
+                      :model-value="config.remote.device_id ?? ''"
+                      @update:model-value="setRemoteString('device_id', $event)"
+                    />
+                    <Button
+                      class="whitespace-nowrap"
+                      variant="outline"
+                      type="button"
+                      @click="generateRemoteDeviceId"
+                    >
+                      <Shuffle class="size-4" />
+                      随机生成
+                    </Button>
+                  </div>
+                </div>
+                <div class="grid gap-2">
+                  <Label for="remote-device-name">Device Name</Label>
+                  <Input
+                    id="remote-device-name"
+                    :model-value="config.remote.device_name ?? ''"
+                    @update:model-value="setRemoteString('device_name', $event)"
+                  />
+                </div>
+              </div>
+
+              <div class="grid gap-4 md:grid-cols-2">
+                <div class="grid gap-2">
+                  <Label for="remote-poll-interval">轮询时间（秒）</Label>
+                  <Input
+                    id="remote-poll-interval"
+                    type="number"
+                    min="1"
+                    :model-value="config.remote.poll_interval_seconds"
+                    @update:model-value="setRemoteNumber('poll_interval_seconds', $event)"
+                  />
+                </div>
+                <div class="grid gap-2">
+                  <Label for="remote-max-retries">上报重试次数</Label>
+                  <Input
+                    id="remote-max-retries"
+                    type="number"
+                    min="1"
+                    :model-value="config.remote.max_report_retries"
+                    @update:model-value="setRemoteNumber('max_report_retries', $event)"
+                  />
                 </div>
               </div>
             </CardContent>

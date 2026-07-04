@@ -1,5 +1,5 @@
 use crate::{
-    app_state::AppState, config::AgentConfig, logs::TaskLogEntry,
+    app_state::AppState, config::AgentConfig, logs::TaskLogEntry, remote_client::RemoteClient,
     test_print::print_calibration_page_with_config,
 };
 use tauri::State;
@@ -26,6 +26,19 @@ pub async fn save_config(
 ) -> Result<AgentConfig, String> {
     apply_autostart(&app, config.app.autostart)?;
     save_config_for_state(config, &state).await
+}
+
+/// 使用远程配置执行 GET/POST 连接测试。
+#[tauri::command]
+pub async fn test_remote_connection(config: AgentConfig) -> Result<(), String> {
+    if !config.remote.enabled {
+        return Ok(());
+    }
+
+    RemoteClient::default()
+        .test_connection(&config.remote)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// 通过 AppState 保存配置，便于测试绕过 Tauri app handle。
