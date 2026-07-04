@@ -20,6 +20,7 @@ pub struct AppState {
     pub status_events: broadcast::Sender<TaskLogEntry>,
     pub queue: Arc<Mutex<QueueState>>,
     pub queue_notify: Arc<Notify>,
+    pub print_lock: Arc<Mutex<()>>,
     pub printing: Arc<dyn PrintBackend + Send + Sync>,
 }
 
@@ -65,6 +66,7 @@ impl AppState {
             status_events,
             queue: Arc::new(Mutex::new(QueueState::default())),
             queue_notify: Arc::new(Notify::new()),
+            print_lock: Arc::new(Mutex::new(())),
             printing: Arc::from(printing),
         }
     }

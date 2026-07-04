@@ -8,6 +8,7 @@ pub mod printing;
 pub mod protocol;
 pub mod queue;
 pub mod server;
+pub mod test_print;
 pub mod tray;
 
 use app_state::AppState;
@@ -61,7 +62,8 @@ pub fn run() {
             commands::get_config,
             commands::save_config,
             commands::get_logs,
-            commands::is_debug_build
+            commands::is_debug_build,
+            commands::print_test
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

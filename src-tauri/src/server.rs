@@ -5,6 +5,7 @@ use crate::{
     printing::{PaperInfo, PrintError, PrinterInfo},
     protocol::{is_allowed_origin, ClientMessage, ErrorCode, JobStatus, ServerMessage},
     queue::QueueError,
+    test_print::{print_calibration_page, TestPrintError},
 };
 use axum::{
     extract::{
@@ -165,15 +166,23 @@ async fn get_logs(State(state): State<AppState>) -> Json<Vec<TaskLogEntry>> {
     Json(state.logs.lock().await.recent())
 }
 
-/// 预留接口，用于未来支持测试打印。
-async fn print_test() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(ErrorResponse {
-            error_code: ErrorCode::InternalError,
-            message: "test print is not implemented".to_string(),
-        }),
-    )
+/// 使用当前默认打印设置提交标签校准测试页。
+async fn print_test(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    if !is_settings_origin_allowed(headers.get(ORIGIN).and_then(|value| value.to_str().ok())) {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            error_code: ErrorCode::OriginNotAllowed,
+            message: "origin is not allowed".to_string(),
+        });
+    }
+
+    print_calibration_page(&state)
+        .await
+        .map(|()| StatusCode::ACCEPTED)
+        .map_err(ApiError::from)
 }
 
 /// 把允许的浏览器连接升级为 PrintBridge WebSocket 协议。
@@ -194,6 +203,14 @@ async fn ws_handler(
 pub async fn is_ws_origin_allowed(state: &AppState, origin: Option<&str>) -> bool {
     let config = state.config.read().await;
     is_allowed_origin(origin, &config.security.allowed_origins)
+}
+
+/// 检查仅供桌面设置 UI 调用的 HTTP API Origin。
+fn is_settings_origin_allowed(origin: Option<&str>) -> bool {
+    matches!(
+        origin,
+        Some("http://localhost:1420" | "tauri://localhost" | "http://tauri.localhost")
+    )
 }
 
 /// 处理单个 WebSocket 连接，并只转发该连接接受的任务。
@@ -437,6 +454,30 @@ impl From<PrintError> for ApiError {
     }
 }
 
+impl From<TestPrintError> for ApiError {
+    /// 把测试打印错误转换为 HTTP 响应。
+    fn from(error: TestPrintError) -> Self {
+        match error {
+            TestPrintError::PrinterNotConfigured => Self {
+                status: StatusCode::BAD_REQUEST,
+                error_code: ErrorCode::PrinterNotConfigured,
+                message: error.to_string(),
+            },
+            TestPrintError::PaperNotConfigured => Self {
+                status: StatusCode::BAD_REQUEST,
+                error_code: ErrorCode::PaperNotConfigured,
+                message: error.to_string(),
+            },
+            TestPrintError::Document(_) => Self {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                error_code: ErrorCode::InternalError,
+                message: error.to_string(),
+            },
+            TestPrintError::Print(error) => Self::from(error),
+        }
+    }
+}
+
 impl ApiError {
     /// 构造通用内部服务错误响应。
     fn internal(error: impl ToString) -> Self {
@@ -466,8 +507,9 @@ impl IntoResponse for ApiError {
 mod tests {
     use crate::{
         app_state::AppState,
-        config::{AgentConfig, SecurityConfig, ServiceConfig},
+        config::{AgentConfig, PrintingConfig, SecurityConfig, ServiceConfig},
         logs::TaskLogEntry,
+        printing::{PaperInfo, PrintBackend, PrintOptions, PrintResult, PrinterInfo},
         protocol::{ErrorCode, JobStatus, ServerMessage},
         server::{configured_addr, health, is_ws_origin_allowed},
     };
@@ -480,7 +522,12 @@ mod tests {
             Method, Request, StatusCode,
         },
     };
-    use std::{collections::HashSet, fs};
+    use std::{
+        collections::HashSet,
+        fs,
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex},
+    };
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -579,23 +626,130 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn print_test_reports_not_implemented_instead_of_fake_queueing() {
+    async fn print_test_requires_default_printer_and_paper() {
         let response = super::router(AppState::new(AgentConfig::default()))
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
                     .uri("/print/test")
+                    .header(ORIGIN, "tauri://localhost")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let error: super::ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(error.error_code, ErrorCode::InternalError);
-        assert!(error.message.contains("not implemented"));
+        assert_eq!(error.error_code, ErrorCode::PrinterNotConfigured);
+        assert!(error.message.contains("printer not configured"));
+    }
+
+    #[tokio::test]
+    async fn print_test_requires_default_paper() {
+        let state = AppState::with_printing(
+            AgentConfig {
+                printing: PrintingConfig {
+                    default_printer: Some("Printer A".to_string()),
+                    default_paper: None,
+                    default_copies: 1,
+                },
+                ..AgentConfig::default()
+            },
+            Box::new(MockPrintBackend {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+
+        let response = super::router(state)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/print/test")
+                    .header(ORIGIN, "tauri://localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let error: super::ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error.error_code, ErrorCode::PaperNotConfigured);
+        assert!(error.message.contains("paper not configured"));
+    }
+
+    #[tokio::test]
+    async fn print_test_rejects_untrusted_origin() {
+        let response = super::router(AppState::new(AgentConfig::default()))
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/print/test")
+                    .header(ORIGIN, "https://example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let error: super::ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error.error_code, ErrorCode::OriginNotAllowed);
+    }
+
+    #[tokio::test]
+    async fn print_test_generates_calibration_pdf_for_default_paper() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let state = AppState::with_printing(
+            AgentConfig {
+                printing: PrintingConfig {
+                    default_printer: Some("Printer A".to_string()),
+                    default_paper: Some(crate::protocol::EffectivePaper {
+                        width_mm: 60.0,
+                        height_mm: 40.0,
+                    }),
+                    default_copies: 1,
+                },
+                ..AgentConfig::default()
+            },
+            Box::new(MockPrintBackend {
+                calls: calls.clone(),
+            }),
+        );
+
+        let response = super::router(state)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/print/test")
+                    .header(ORIGIN, "tauri://localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let call = &calls[0];
+        assert_eq!(call.options.printer_name, "Printer A");
+        assert_eq!(call.options.paper.width_mm, 60.0);
+        assert_eq!(call.options.paper.height_mm, 40.0);
+        assert_eq!(call.options.copies, 1);
+        assert_eq!(
+            call.path.extension().and_then(|value| value.to_str()),
+            Some("pdf")
+        );
+        assert!(call.path_bytes.starts_with(b"%PDF-"));
+        assert!(call
+            .path_bytes
+            .windows(b"PrintBridge Test".len())
+            .any(|window| window == b"PrintBridge Test"));
     }
 
     #[test]
@@ -629,6 +783,35 @@ mod tests {
             super::status_message_for_connection(&other, &accepted),
             None
         );
+    }
+
+    struct MockPrintBackend {
+        calls: Arc<Mutex<Vec<PrintCall>>>,
+    }
+
+    struct PrintCall {
+        path: PathBuf,
+        path_bytes: Vec<u8>,
+        options: PrintOptions,
+    }
+
+    impl PrintBackend for MockPrintBackend {
+        fn list_printers(&self) -> PrintResult<Vec<PrinterInfo>> {
+            Ok(vec![])
+        }
+
+        fn list_papers(&self, _printer_name: &str) -> PrintResult<Vec<PaperInfo>> {
+            Ok(vec![])
+        }
+
+        fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<()> {
+            self.calls.lock().unwrap().push(PrintCall {
+                path: path.to_path_buf(),
+                path_bytes: fs::read(path).unwrap(),
+                options: options.clone(),
+            });
+            Ok(())
+        }
     }
 
     #[tokio::test]

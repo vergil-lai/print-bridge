@@ -5,6 +5,7 @@ import {
   ExternalLink,
   Monitor,
   Moon,
+  Printer,
   RefreshCw,
   RotateCw,
   Save,
@@ -14,7 +15,15 @@ import {
 import { getVersion } from '@tauri-apps/api/app';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import appIcon from '@/assets/app-icon.png';
-import { fetchPapers, fetchPrinters, getConfig, getLogs, isDebugBuild, saveConfig } from '@/api';
+import {
+  fetchPapers,
+  fetchPrinters,
+  getConfig,
+  getLogs,
+  isDebugBuild,
+  printTestPage,
+  saveConfig,
+} from '@/api';
 import type { AgentConfig, EffectivePaper, PaperInfo, PrinterInfo, TaskLogEntry } from '@/types';
 import {
   checkForAppUpdate,
@@ -76,6 +85,7 @@ const loadingPrinters = ref(false);
 const loadingPapers = ref(false);
 const loadingLogs = ref(false);
 const saving = ref(false);
+const testingPrint = ref(false);
 const activePort = ref<number | null>(null);
 const appVersion = ref('-');
 const updateStatus = ref<UpdateStatus>('idle');
@@ -134,6 +144,12 @@ const updateButtonLabel = computed(() => {
 
   return '下载并安装';
 });
+/** 当前配置是否足够提交测试打印。 */
+const canTestPrint = computed(
+  () =>
+    Boolean(config.value?.printing.default_printer) &&
+    Boolean(config.value?.printing.default_paper),
+);
 
 /** 默认打印机选择项的双向计算值。 */
 const selectedPrinter = computed({
@@ -370,6 +386,23 @@ async function persistConfig(): Promise<void> {
     errorMessage.value = error instanceof Error ? error.message : '保存或重启失败';
   } finally {
     saving.value = false;
+  }
+}
+
+/** 使用当前 Agent 默认打印设置提交测试校准页。 */
+async function handleTestPrint(): Promise<void> {
+  if (!config.value || !canTestPrint.value) return;
+  testingPrint.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    await printTestPage(config.value);
+    successMessage.value = '测试打印已提交';
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '测试打印失败';
+  } finally {
+    testingPrint.value = false;
   }
 }
 
@@ -641,7 +674,7 @@ onBeforeUnmount(() => {
               <CardTitle class="text-base"> 打印设置 </CardTitle>
             </CardHeader>
             <CardContent class="grid gap-5">
-              <div class="grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
+              <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
                 <div class="grid gap-2">
                   <Label for="default-printer">默认打印机</Label>
                   <Select
@@ -662,9 +695,23 @@ onBeforeUnmount(() => {
                     </SelectContent>
                   </Select>
                 </div>
-                <Button variant="outline" :disabled="loadingPrinters" @click="refreshPrinters">
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="loadingPrinters"
+                  @click="refreshPrinters"
+                >
                   <RefreshCw class="size-4" :class="{ 'animate-spin': loadingPrinters }" />
                   刷新
+                </Button>
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="!canTestPrint || testingPrint"
+                  @click="handleTestPrint"
+                >
+                  <Printer class="size-4" />
+                  {{ testingPrint ? '提交中' : '测试打印' }}
                 </Button>
               </div>
 

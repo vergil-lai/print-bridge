@@ -176,7 +176,10 @@ async fn print_downloaded_file(
         prepare_printable_pdf(downloaded_path, queued_job.job.format, &options.paper).await?;
 
     push_log(state, queued_job, JobStatus::Printing, "printing").await;
-    let print_result = state.printing.print_pdf(&printable_path, options);
+    let print_result = {
+        let _print_guard = state.print_lock.lock().await;
+        state.printing.print_pdf(&printable_path, options)
+    };
 
     // 转换后的图片会生成第二个临时 PDF，原始 PDF 则复用下载路径。
     if printable_path != downloaded_path {

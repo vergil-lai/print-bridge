@@ -55,3 +55,8 @@ export async function fetchPapers(port: number, printerName: string): Promise<Pa
 
   return response.papers;
 }
+
+/** 使用当前默认打印设置提交一张测试校准页。 */
+export function printTestPage(config: AgentConfig): Promise<void> {
+  return invoke<void>('print_test', { config });
+}
