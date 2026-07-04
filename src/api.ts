@@ -31,6 +31,11 @@ export function saveConfig(config: AgentConfig): Promise<AgentConfig> {
   return invoke<AgentConfig>('save_config', { config });
 }
 
+/** 使用当前远程任务配置执行连接测试。 */
+export function testRemoteConnection(config: AgentConfig): Promise<void> {
+  return invoke<void>('test_remote_connection', { config });
+}
+
 /** 读取当前桌面应用是否为 debug 构建。 */
 export function isDebugBuild(): Promise<boolean> {
   return invoke<boolean>('is_debug_build');
@@ -54,4 +59,9 @@ export async function fetchPapers(port: number, printerName: string): Promise<Pa
   );
 
   return response.papers;
+}
+
+/** 使用当前默认打印设置提交一张测试校准页。 */
+export function printTestPage(config: AgentConfig): Promise<void> {
+  return invoke<void>('print_test', { config });
 }

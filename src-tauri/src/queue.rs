@@ -6,6 +6,7 @@ use crate::{
     logs::TaskLogEntry,
     printing::{paper_name, PaperInfo, PrintError, PrintOptions},
     protocol::{EffectivePaper, JobStatus, PrintJobInput, SupportedFormat},
+    remote_store::{NewRemoteStatusEvent, RemoteReportStatus},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -21,6 +22,8 @@ pub struct QueuedJob {
     pub request_id: String,
     pub batch_id: Option<String>,
     pub job: PrintJobInput,
+    #[serde(default)]
+    pub remote: bool,
 }
 
 /// 可映射回协议错误码的队列接收错误。
@@ -47,6 +50,21 @@ impl QueueState {
             request_id,
             batch_id: None,
             job,
+            remote: false,
+        })
+    }
+
+    /// 接收远程服务拉取到的单个任务。
+    pub fn accept_remote_job(
+        &mut self,
+        request_id: String,
+        job: PrintJobInput,
+    ) -> Result<(), QueueError> {
+        self.accept_queued_job(QueuedJob {
+            request_id,
+            batch_id: None,
+            job,
+            remote: true,
         })
     }
 
@@ -68,12 +86,30 @@ impl QueueState {
         batch_id: String,
         jobs: Vec<PrintJobInput>,
     ) -> Result<(), QueueError> {
+        self.accept_batch_with_remote(request_id, batch_id, jobs, false)
+    }
+
+    /// 接收远程服务拉取到的整批任务。
+    pub fn accept_remote_batch(
+        &mut self,
+        request_id: String,
+        batch_id: String,
+        jobs: Vec<PrintJobInput>,
+    ) -> Result<(), QueueError> {
+        self.accept_batch_with_remote(request_id, batch_id, jobs, true)
+    }
+
+    fn accept_batch_with_remote(
+        &mut self,
+        request_id: String,
+        batch_id: String,
+        jobs: Vec<PrintJobInput>,
+        remote: bool,
+    ) -> Result<(), QueueError> {
         if self.seen_batch_ids.contains(&batch_id) {
             return Err(QueueError::DuplicateBatchId);
         }
 
-        // 先校验整批任务再修改队列状态，避免
-        // 部分批次被接收。
         let mut batch_job_ids = HashSet::new();
         for job in &jobs {
             if self.seen_job_ids.contains(&job.job_id) || !batch_job_ids.insert(job.job_id.clone())
@@ -89,6 +125,7 @@ impl QueueState {
                 request_id: request_id.clone(),
                 batch_id: Some(batch_id.clone()),
                 job,
+                remote,
             });
         }
 
@@ -176,7 +213,10 @@ async fn print_downloaded_file(
         prepare_printable_pdf(downloaded_path, queued_job.job.format, &options.paper).await?;
 
     push_log(state, queued_job, JobStatus::Printing, "printing").await;
-    let print_result = state.printing.print_pdf(&printable_path, options);
+    let print_result = {
+        let _print_guard = state.print_lock.lock().await;
+        state.printing.print_pdf(&printable_path, options)
+    };
 
     // 转换后的图片会生成第二个临时 PDF，原始 PDF 则复用下载路径。
     if printable_path != downloaded_path {
@@ -353,6 +393,49 @@ async fn push_log(state: &AppState, queued_job: &QueuedJob, status: JobStatus, m
     };
     state.logs.lock().await.push(entry.clone());
     state.broadcast_status(entry);
+    enqueue_remote_status_event(state, queued_job, status, message).await;
+}
+
+async fn enqueue_remote_status_event(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    status: JobStatus,
+    message: &str,
+) {
+    if !queued_job.remote {
+        return;
+    }
+    let Some(remote_status) = remote_status_for_job_status(status) else {
+        return;
+    };
+    let Some(store) = &state.remote_store else {
+        return;
+    };
+    let occurred_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+    let _ = store.insert_status_event(&NewRemoteStatusEvent {
+        job_id: &queued_job.job.job_id,
+        request_id: &queued_job.request_id,
+        batch_id: queued_job.batch_id.as_deref(),
+        status: remote_status,
+        message: if message.is_empty() {
+            None
+        } else {
+            Some(message)
+        },
+        occurred_at: &occurred_at,
+        next_retry_at: &occurred_at,
+    });
+}
+
+fn remote_status_for_job_status(status: JobStatus) -> Option<RemoteReportStatus> {
+    match status {
+        JobStatus::Queued => Some(RemoteReportStatus::Accepted),
+        JobStatus::Success => Some(RemoteReportStatus::Success),
+        JobStatus::Failed | JobStatus::Cancelled => Some(RemoteReportStatus::Failed),
+        JobStatus::Downloading | JobStatus::Printing => None,
+    }
 }
 
 #[cfg(test)]
@@ -363,6 +446,7 @@ mod worker_tests {
         config::{AgentConfig, PrintingConfig},
         printing::{PaperInfo, PrintBackend, PrintOptions, PrintResult, PrinterInfo},
         protocol::{EffectivePaper, JobStatus, PrintJobInput, SupportedFormat},
+        remote_store::{RemoteReportStatus, RemoteStore},
     };
     use image::{ImageBuffer, Rgb};
     use std::{
@@ -467,6 +551,49 @@ mod worker_tests {
             .iter()
             .any(|entry| entry.status == JobStatus::Failed
                 && entry.message.contains("paper not configured")));
+    }
+
+    #[tokio::test]
+    async fn remote_process_job_creates_remote_status_events() {
+        let mut missing_printer_config = AgentConfig::default();
+        missing_printer_config.printing.default_paper = Some(EffectivePaper {
+            width_mm: 80.0,
+            height_mm: 50.0,
+        });
+        let store = RemoteStore::open_in_memory().unwrap();
+        let state = AppState::with_printing(
+            missing_printer_config,
+            Box::new(MockPrintBackend::default()),
+        )
+        .with_remote_store(store);
+        let queued = QueuedJob {
+            request_id: "REQ-001".to_string(),
+            batch_id: None,
+            job: job_with(
+                "JOB-001",
+                SupportedFormat::Pdf,
+                "http://127.0.0.1/file.pdf",
+                1,
+                None,
+            ),
+            remote: true,
+        };
+
+        process_job(&state, queued).await;
+
+        let events = state
+            .remote_store
+            .as_ref()
+            .unwrap()
+            .pending_status_events("9999-01-01T00:00:00Z", 10)
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .any(|event| event.status == RemoteReportStatus::Accepted));
+        assert!(events
+            .iter()
+            .any(|event| event.status == RemoteReportStatus::Failed));
     }
 
     #[tokio::test]
@@ -612,6 +739,7 @@ mod worker_tests {
             request_id: "request-1".to_string(),
             batch_id: None,
             job,
+            remote: false,
         }
     }
 

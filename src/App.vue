@@ -5,16 +5,27 @@ import {
   ExternalLink,
   Monitor,
   Moon,
+  Printer,
   RefreshCw,
   RotateCw,
   Save,
+  Shuffle,
   Sun,
   Trash2,
 } from '@lucide/vue';
 import { getVersion } from '@tauri-apps/api/app';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import appIcon from '@/assets/app-icon.png';
-import { fetchPapers, fetchPrinters, getConfig, getLogs, isDebugBuild, saveConfig } from '@/api';
+import {
+  fetchPapers,
+  fetchPrinters,
+  getConfig,
+  getLogs,
+  isDebugBuild,
+  printTestPage,
+  saveConfig,
+  testRemoteConnection,
+} from '@/api';
 import type { AgentConfig, EffectivePaper, PaperInfo, PrinterInfo, TaskLogEntry } from '@/types';
 import {
   checkForAppUpdate,
@@ -56,6 +67,16 @@ const DEFAULT_PAPER: EffectivePaper = {
   width_mm: 60,
   height_mm: 40,
 };
+const DEFAULT_REMOTE_CONFIG: AgentConfig['remote'] = {
+  enabled: false,
+  endpoint_url: null,
+  bearer_token: null,
+  device_id: null,
+  device_name: null,
+  poll_interval_seconds: 10,
+  max_report_retries: 10,
+  history_retention_days: 3,
+};
 
 const GITHUB_REPOSITORY_URL = 'https://github.com/vergil-lai/print-bridge';
 const GITHUB_RELEASES_URL = 'https://github.com/vergil-lai/print-bridge/releases';
@@ -76,6 +97,8 @@ const loadingPrinters = ref(false);
 const loadingPapers = ref(false);
 const loadingLogs = ref(false);
 const saving = ref(false);
+const testingPrint = ref(false);
+const testingRemote = ref(false);
 const activePort = ref<number | null>(null);
 const appVersion = ref('-');
 const updateStatus = ref<UpdateStatus>('idle');
@@ -134,7 +157,12 @@ const updateButtonLabel = computed(() => {
 
   return '下载并安装';
 });
-
+/** 当前配置是否足够提交测试打印。 */
+const canTestPrint = computed(
+  () =>
+    Boolean(config.value?.printing.default_printer) &&
+    Boolean(config.value?.printing.default_paper),
+);
 /** 默认打印机选择项的双向计算值。 */
 const selectedPrinter = computed({
   get: () => config.value?.printing.default_printer ?? '',
@@ -170,6 +198,10 @@ function normalizeConfig(value: AgentConfig): AgentConfig {
     printing: {
       ...value.printing,
       default_paper: value.printing.default_paper ?? { ...DEFAULT_PAPER },
+    },
+    remote: {
+      ...DEFAULT_REMOTE_CONFIG,
+      ...value.remote,
     },
   };
 }
@@ -270,6 +302,34 @@ function setPaperDimension(key: keyof EffectivePaper, value: string | number): v
   }
 }
 
+/** 更新远程任务配置中的可空字符串。 */
+function setRemoteString(
+  key: 'endpoint_url' | 'bearer_token' | 'device_id' | 'device_name',
+  value: string | number,
+): void {
+  if (!config.value) return;
+  const nextValue = String(value).trim();
+  config.value.remote[key] = nextValue || null;
+}
+
+/** 更新远程任务配置中的正整数。 */
+function setRemoteNumber(
+  key: 'poll_interval_seconds' | 'max_report_retries',
+  value: string | number,
+): void {
+  if (!config.value) return;
+  const nextValue = Number(value);
+  if (Number.isInteger(nextValue) && nextValue > 0) {
+    config.value.remote[key] = nextValue;
+  }
+}
+
+/** 为当前设备生成随机 UUID v4。 */
+function generateRemoteDeviceId(): void {
+  if (!config.value) return;
+  config.value.remote.device_id = crypto.randomUUID();
+}
+
 /** 加载配置、打印机、纸张和最近日志，初始化页面状态。 */
 async function loadConfig(): Promise<void> {
   loadingConfig.value = true;
@@ -355,6 +415,9 @@ async function persistConfig(): Promise<void> {
   try {
     const savedPort = config.value.service.port;
     const portChanged = activePort.value !== null && savedPort !== activePort.value;
+    if (config.value.remote.enabled) {
+      await testRemoteConnection(config.value);
+    }
     config.value = normalizeConfig(await saveConfig(config.value));
     if (portChanged) {
       if (await isDebugBuild()) {
@@ -370,6 +433,40 @@ async function persistConfig(): Promise<void> {
     errorMessage.value = error instanceof Error ? error.message : '保存或重启失败';
   } finally {
     saving.value = false;
+  }
+}
+
+/** 手动测试远程任务 URL 的 GET/POST 连通性。 */
+async function handleTestRemoteConnection(): Promise<void> {
+  if (!config.value || !config.value.remote.enabled) return;
+  testingRemote.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    await testRemoteConnection(config.value);
+    successMessage.value = '远程任务连接测试通过';
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '远程任务连接测试失败';
+  } finally {
+    testingRemote.value = false;
+  }
+}
+
+/** 使用当前 Agent 默认打印设置提交测试校准页。 */
+async function handleTestPrint(): Promise<void> {
+  if (!config.value || !canTestPrint.value) return;
+  testingPrint.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    await printTestPage(config.value);
+    successMessage.value = '测试打印已提交';
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '测试打印失败';
+  } finally {
+    testingPrint.value = false;
   }
 }
 
@@ -641,7 +738,7 @@ onBeforeUnmount(() => {
               <CardTitle class="text-base"> 打印设置 </CardTitle>
             </CardHeader>
             <CardContent class="grid gap-5">
-              <div class="grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
+              <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
                 <div class="grid gap-2">
                   <Label for="default-printer">默认打印机</Label>
                   <Select
@@ -662,9 +759,23 @@ onBeforeUnmount(() => {
                     </SelectContent>
                   </Select>
                 </div>
-                <Button variant="outline" :disabled="loadingPrinters" @click="refreshPrinters">
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="loadingPrinters"
+                  @click="refreshPrinters"
+                >
                   <RefreshCw class="size-4" :class="{ 'animate-spin': loadingPrinters }" />
                   刷新
+                </Button>
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="!canTestPrint || testingPrint"
+                  @click="handleTestPrint"
+                >
+                  <Printer class="size-4" />
+                  {{ testingPrint ? '提交中' : '测试打印' }}
                 </Button>
               </div>
 
@@ -746,6 +857,103 @@ onBeforeUnmount(() => {
                   </div>
                   <Switch id="autostart" v-model="config.app.autostart" />
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card class="mt-4">
+            <CardHeader class="pb-3">
+              <div class="flex items-center justify-between gap-3">
+                <CardTitle class="text-base"> 远程任务 </CardTitle>
+                <Switch id="remote-enabled" v-model="config.remote.enabled" />
+              </div>
+            </CardHeader>
+            <CardContent class="grid gap-5">
+              <div class="grid gap-2">
+                <Label for="remote-url">任务 URL</Label>
+                <Input
+                  id="remote-url"
+                  type="url"
+                  placeholder="https://api.example.com/print-task"
+                  :model-value="config.remote.endpoint_url ?? ''"
+                  @update:model-value="setRemoteString('endpoint_url', $event)"
+                />
+              </div>
+
+              <div class="grid gap-2">
+                <Label for="remote-token">Authorization Bearer Token</Label>
+                <Input
+                  id="remote-token"
+                  type="password"
+                  autocomplete="off"
+                  :model-value="config.remote.bearer_token ?? ''"
+                  @update:model-value="setRemoteString('bearer_token', $event)"
+                />
+              </div>
+
+              <div class="grid gap-4 md:grid-cols-2">
+                <div class="grid gap-2">
+                  <Label for="remote-device-id">Device ID</Label>
+                  <div class="flex gap-2">
+                    <Input
+                      id="remote-device-id"
+                      class="min-w-0 flex-1"
+                      :model-value="config.remote.device_id ?? ''"
+                      @update:model-value="setRemoteString('device_id', $event)"
+                    />
+                    <Button
+                      class="whitespace-nowrap"
+                      variant="outline"
+                      type="button"
+                      @click="generateRemoteDeviceId"
+                    >
+                      <Shuffle class="size-4" />
+                      随机生成
+                    </Button>
+                  </div>
+                </div>
+                <div class="grid gap-2">
+                  <Label for="remote-device-name">Device Name</Label>
+                  <Input
+                    id="remote-device-name"
+                    :model-value="config.remote.device_name ?? ''"
+                    @update:model-value="setRemoteString('device_name', $event)"
+                  />
+                </div>
+              </div>
+
+              <div class="grid gap-4 md:grid-cols-2">
+                <div class="grid gap-2">
+                  <Label for="remote-poll-interval">轮询时间（秒）</Label>
+                  <Input
+                    id="remote-poll-interval"
+                    type="number"
+                    min="1"
+                    :model-value="config.remote.poll_interval_seconds"
+                    @update:model-value="setRemoteNumber('poll_interval_seconds', $event)"
+                  />
+                </div>
+                <div class="grid gap-2">
+                  <Label for="remote-max-retries">上报重试次数</Label>
+                  <Input
+                    id="remote-max-retries"
+                    type="number"
+                    min="1"
+                    :model-value="config.remote.max_report_retries"
+                    @update:model-value="setRemoteNumber('max_report_retries', $event)"
+                  />
+                </div>
+              </div>
+
+              <div class="flex justify-end">
+                <Button
+                  variant="outline"
+                  :disabled="!config.remote.enabled || testingRemote"
+                  @click="handleTestRemoteConnection"
+                >
+                  <RefreshCw class="size-4" :class="{ 'animate-spin': testingRemote }" />
+                  {{ testingRemote ? '测试中' : '测试连接' }}
+                </Button>
               </div>
             </CardContent>
           </Card>

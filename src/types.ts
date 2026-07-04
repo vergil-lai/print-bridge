@@ -27,6 +27,16 @@ export interface AgentConfig {
   app: {
     autostart: boolean;
   };
+  remote: {
+    enabled: boolean;
+    endpoint_url: string | null;
+    bearer_token: string | null;
+    device_id: string | null;
+    device_name: string | null;
+    poll_interval_seconds: number;
+    max_report_retries: number;
+    history_retention_days: number;
+  };
 }
 
 /** 本地服务返回的打印机摘要。 */

@@ -1,4 +1,7 @@
-use crate::{app_state::AppState, config::AgentConfig, logs::TaskLogEntry};
+use crate::{
+    app_state::AppState, config::AgentConfig, logs::TaskLogEntry, remote_client::RemoteClient,
+    test_print::print_calibration_page_with_config,
+};
 use tauri::State;
 use tauri_plugin_autostart::ManagerExt;
 
@@ -23,6 +26,19 @@ pub async fn save_config(
 ) -> Result<AgentConfig, String> {
     apply_autostart(&app, config.app.autostart)?;
     save_config_for_state(config, &state).await
+}
+
+/// 使用远程配置执行 GET/POST 连接测试。
+#[tauri::command]
+pub async fn test_remote_connection(config: AgentConfig) -> Result<(), String> {
+    if !config.remote.enabled {
+        return Ok(());
+    }
+
+    RemoteClient::default()
+        .test_connection(&config.remote)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// 通过 AppState 保存配置，便于测试绕过 Tauri app handle。
@@ -51,6 +67,14 @@ fn apply_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> 
 #[tauri::command]
 pub async fn get_logs(state: State<'_, AppState>) -> Result<Vec<TaskLogEntry>, String> {
     Ok(state.logs.lock().await.recent())
+}
+
+/// 使用当前 Agent 默认打印设置提交一张校准测试页。
+#[tauri::command]
+pub async fn print_test(config: AgentConfig, state: State<'_, AppState>) -> Result<(), String> {
+    print_calibration_page_with_config(&state, config)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

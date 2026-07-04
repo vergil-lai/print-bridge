@@ -1,5 +1,8 @@
 use print_bridge_lib::{
-    config::{AgentConfig, AppConfig, LimitsConfig, PrintingConfig, SecurityConfig, ServiceConfig},
+    config::{
+        AgentConfig, AppConfig, LimitsConfig, PrintingConfig, RemoteConfig, SecurityConfig,
+        ServiceConfig,
+    },
     protocol::EffectivePaper,
 };
 use std::fs;
@@ -19,6 +22,14 @@ fn agent_config_defaults_match_grouped_baseline() {
     assert_eq!(config.limits.max_copies, 100);
     assert_eq!(config.limits.download_timeout_seconds, 30);
     assert!(!config.app.autostart);
+    assert!(!config.remote.enabled);
+    assert_eq!(config.remote.endpoint_url, None);
+    assert_eq!(config.remote.bearer_token, None);
+    assert_eq!(config.remote.device_id, None);
+    assert_eq!(config.remote.device_name, None);
+    assert_eq!(config.remote.poll_interval_seconds, 10);
+    assert_eq!(config.remote.max_report_retries, 10);
+    assert_eq!(config.remote.history_retention_days, 3);
 }
 
 #[test]
@@ -46,12 +57,46 @@ fn agent_config_json_roundtrips() {
             download_timeout_seconds: 15,
         },
         app: AppConfig { autostart: true },
+        remote: RemoteConfig {
+            enabled: true,
+            endpoint_url: Some("https://api.example.com/print-task".to_string()),
+            bearer_token: Some("secret-token".to_string()),
+            device_id: Some("019f31f4-9f4a-4b41-9e30-2d2c28f5a6c1".to_string()),
+            device_name: Some("warehouse-printer-01".to_string()),
+            poll_interval_seconds: 30,
+            max_report_retries: 7,
+            history_retention_days: 5,
+        },
     };
 
     let json = serde_json::to_string(&config).unwrap();
     let decoded: AgentConfig = serde_json::from_str(&json).unwrap();
 
     assert_eq!(decoded, config);
+}
+
+#[test]
+fn agent_config_loads_legacy_json_without_remote_config() {
+    let json = r#"{
+        "service": { "host": "127.0.0.1", "port": 17890 },
+        "security": { "allowed_origins": [] },
+        "printing": {
+            "default_printer": null,
+            "default_paper": null,
+            "default_copies": 1
+        },
+        "limits": {
+            "max_file_size_mb": 20,
+            "max_batch_jobs": 20,
+            "max_copies": 100,
+            "download_timeout_seconds": 30
+        },
+        "app": { "autostart": false }
+    }"#;
+
+    let decoded: AgentConfig = serde_json::from_str(json).unwrap();
+
+    assert_eq!(decoded.remote, RemoteConfig::default());
 }
 
 #[test]

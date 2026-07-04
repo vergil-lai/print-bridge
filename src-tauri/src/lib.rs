@@ -7,11 +7,17 @@ pub mod logs;
 pub mod printing;
 pub mod protocol;
 pub mod queue;
+pub mod remote_client;
+pub mod remote_protocol;
+pub mod remote_store;
+pub mod remote_worker;
 pub mod server;
+pub mod test_print;
 pub mod tray;
 
 use app_state::AppState;
 use config::AgentConfig;
+use std::io;
 #[cfg(target_os = "windows")]
 use tauri::path::BaseDirectory;
 use tauri::Manager;
@@ -28,12 +34,18 @@ pub fn run() {
         .setup(|app| {
             tray::setup_tray(app)?;
 
-            let config_path = app.path().app_config_dir()?.join("config.json");
+            let app_config_dir = app.path().app_config_dir()?;
+            std::fs::create_dir_all(&app_config_dir)?;
+            let config_path = app_config_dir.join("config.json");
             let config = AgentConfig::load(&config_path)?;
             let printing = print_backend(app)?;
-            let state = AppState::with_config_path_and_printing(config, config_path, printing);
+            let remote_store = remote_store::RemoteStore::open(&app_config_dir.join("remote.sqlite3"))
+                .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+            let state = AppState::with_config_path_and_printing(config, config_path, printing)
+                .with_remote_store(remote_store);
             let server_state = state.clone();
             let worker_state = state.clone();
+            let remote_worker_state = state.clone();
 
             // 让本地服务和队列 worker 运行在 UI 线程之外。
             tauri::async_runtime::spawn(async move {
@@ -44,6 +56,10 @@ pub fn run() {
 
             tauri::async_runtime::spawn(async move {
                 queue::run_worker(worker_state).await;
+            });
+
+            tauri::async_runtime::spawn(async move {
+                remote_worker::run_worker(remote_worker_state).await;
             });
 
             app.manage(state);
@@ -60,8 +76,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
+            commands::test_remote_connection,
             commands::get_logs,
-            commands::is_debug_build
+            commands::is_debug_build,
+            commands::print_test
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

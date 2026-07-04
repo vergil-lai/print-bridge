@@ -1,6 +1,9 @@
 use image::{ImageBuffer, Rgb};
 use print_bridge_lib::{
-    document::{detect_format_from_bytes, fit_contain, image_to_pdf, DocumentFormat, FitRect},
+    document::{
+        calibration_page_to_pdf, detect_format_from_bytes, fit_contain, image_to_pdf,
+        DocumentFormat, FitRect,
+    },
     protocol::EffectivePaper,
 };
 use std::fs;
@@ -103,6 +106,33 @@ fn image_to_pdf_embeds_image_xobject_on_requested_page() {
     let _ = fs::remove_file(&pdf_path);
 }
 
+#[test]
+fn calibration_page_to_pdf_uses_requested_page_size_and_vector_marks() {
+    let pdf_path = temp_path("calibration.pdf");
+    let _ = fs::remove_file(&pdf_path);
+
+    calibration_page_to_pdf(
+        &EffectivePaper {
+            width_mm: 60.0,
+            height_mm: 40.0,
+        },
+        &pdf_path,
+    )
+    .unwrap();
+
+    let pdf = fs::read(&pdf_path).unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
+    assert!(contains_bytes(&pdf, b"PrintBridge Test"));
+    assert!(contains_bytes(&pdf, b"60 x 40 mm"));
+    assert!(contains_bytes(&pdf, b" m"));
+    assert!(contains_bytes(&pdf, b" l"));
+    let (media_width, media_height) = media_box_size(&pdf).unwrap();
+    assert_close_with_tolerance(media_width, 170.08, 0.5);
+    assert_close_with_tolerance(media_height, 113.39, 0.5);
+
+    let _ = fs::remove_file(&pdf_path);
+}
+
 fn temp_path(file_name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "print-bridge-document-test-{}-{file_name}",
@@ -134,8 +164,12 @@ fn media_box_size(pdf: &[u8]) -> Option<(f64, f64)> {
 }
 
 fn assert_close(actual: f64, expected: f64) {
+    assert_close_with_tolerance(actual, expected, 0.01);
+}
+
+fn assert_close_with_tolerance(actual: f64, expected: f64, tolerance: f64) {
     assert!(
-        (actual - expected).abs() < 0.01,
-        "expected {actual} to be within 0.01 of {expected}"
+        (actual - expected).abs() < tolerance,
+        "expected {actual} to be within {tolerance} of {expected}"
     );
 }

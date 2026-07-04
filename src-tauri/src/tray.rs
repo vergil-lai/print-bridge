@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::{app_state::AppState, test_print::print_calibration_page};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -12,7 +12,7 @@ const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 /// 创建系统托盘菜单，并把菜单动作接到应用状态。
 pub fn setup_tray(app: &mut App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open_settings", "打开设置", true, None::<&str>)?;
-    let test = MenuItem::with_id(app, "test_print", "测试打印（未实现）", false, None::<&str>)?;
+    let test = MenuItem::with_id(app, "test_print", "测试打印", true, None::<&str>)?;
     let logs = MenuItem::with_id(app, "view_logs", "查看日志", true, None::<&str>)?;
     let restart = MenuItem::with_id(
         app,
@@ -33,6 +33,7 @@ pub fn setup_tray(app: &mut App) -> tauri::Result<()> {
     tray.show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open_settings" | "view_logs" => show_main_window(app),
+            "test_print" => test_print(app),
             "restart_app" => restart_app(app),
             "autostart" => toggle_autostart(app),
             "quit" => app.exit(0),
@@ -51,6 +52,23 @@ pub fn setup_tray(app: &mut App) -> tauri::Result<()> {
         .build(app)?;
 
     Ok(())
+}
+
+/// 使用当前默认打印设置提交一张测试校准页。
+fn test_print(app: &tauri::AppHandle) {
+    let Some(state) = app
+        .try_state::<AppState>()
+        .map(|state| state.inner().clone())
+    else {
+        tauri_plugin_log::log::error!("failed to run test print: app state is not initialized");
+        return;
+    };
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = print_calibration_page(&state).await {
+            tauri_plugin_log::log::error!("test print failed: {error}");
+        }
+    });
 }
 
 /// 如果主设置窗口存在，则显示并聚焦它。

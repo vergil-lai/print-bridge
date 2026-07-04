@@ -1,7 +1,8 @@
 use crate::protocol::EffectivePaper;
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb};
 use printpdf::{
-    Mm, Op, PdfDocument, PdfPage, PdfSaveOptions, Pt, RawImage, RawImageData, RawImageFormat,
+    ops::PdfFontHandle, BuiltinFont, Color, Line, LinePoint, Mm, Op, PdfDocument, PdfPage,
+    PdfSaveOptions, Point, Pt, RawImage, RawImageData, RawImageFormat, Rgb as PdfRgb, TextItem,
     XObjectTransform,
 };
 use std::{fs, io::Read, path::Path};
@@ -148,6 +149,137 @@ pub fn image_to_pdf(
     fs::write(output_path, bytes)?;
 
     Ok(())
+}
+
+/// 生成用于检查标签偏移和缩放的矢量校准测试页。
+pub fn calibration_page_to_pdf(paper: &EffectivePaper, output_path: &Path) -> DocumentResult<()> {
+    paper
+        .validate()
+        .map_err(|_| DocumentError::InvalidImageDimensions)?;
+    if !is_positive_finite(paper.width_mm) || !is_positive_finite(paper.height_mm) {
+        return Err(DocumentError::InvalidImageDimensions);
+    }
+
+    let mut doc = PdfDocument::new("print-bridge-calibration-page");
+    let page = PdfPage::new(
+        Mm(paper.width_mm as f32),
+        Mm(paper.height_mm as f32),
+        calibration_page_ops(paper),
+    );
+    let bytes = doc
+        .with_pages(vec![page])
+        .save(&PdfSaveOptions::default(), &mut Vec::new());
+    fs::write(output_path, bytes)?;
+
+    Ok(())
+}
+
+/// 构造校准页的边框、中心线和尺寸标记。
+fn calibration_page_ops(paper: &EffectivePaper) -> Vec<Op> {
+    let min_side = paper.width_mm.min(paper.height_mm);
+    let margin = (min_side * 0.08).clamp(0.2, 4.0).min(min_side / 3.0);
+    let width = paper.width_mm;
+    let height = paper.height_mm;
+    let mid_x = width / 2.0;
+    let mid_y = height / 2.0;
+    let text_size = (min_side * 0.13).clamp(1.0, 8.0);
+
+    vec![
+        Op::SaveGraphicsState,
+        Op::SetOutlineColor {
+            col: grayscale(0.0),
+        },
+        Op::SetOutlineThickness { pt: Pt(0.7) },
+        Op::DrawLine {
+            line: closed_line(&[
+                (margin, margin),
+                (width - margin, margin),
+                (width - margin, height - margin),
+                (margin, height - margin),
+            ]),
+        },
+        Op::SetOutlineThickness { pt: Pt(0.35) },
+        Op::SetOutlineColor {
+            col: grayscale(0.35),
+        },
+        Op::DrawLine {
+            line: open_line(&[(mid_x, margin), (mid_x, height - margin)]),
+        },
+        Op::DrawLine {
+            line: open_line(&[(margin, mid_y), (width - margin, mid_y)]),
+        },
+        Op::StartTextSection,
+        Op::SetFillColor {
+            col: grayscale(0.0),
+        },
+        Op::SetFont {
+            font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+            size: Pt(text_size as f32),
+        },
+        Op::SetTextCursor {
+            pos: point_mm(margin, (height - margin - text_size * 0.35).max(margin)),
+        },
+        Op::ShowText {
+            items: vec![TextItem::Text("PrintBridge Test".to_string())],
+        },
+        Op::SetTextCursor {
+            pos: point_mm(margin, (margin + text_size * 0.2).min(height - margin)),
+        },
+        Op::ShowText {
+            items: vec![TextItem::Text(format!(
+                "{} x {} mm",
+                format_mm_label(width),
+                format_mm_label(height)
+            ))],
+        },
+        Op::EndTextSection,
+        Op::RestoreGraphicsState,
+    ]
+}
+
+fn open_line(points: &[(f64, f64)]) -> Line {
+    Line {
+        points: points.iter().map(|(x, y)| line_point(*x, *y)).collect(),
+        is_closed: false,
+    }
+}
+
+fn closed_line(points: &[(f64, f64)]) -> Line {
+    Line {
+        points: points.iter().map(|(x, y)| line_point(*x, *y)).collect(),
+        is_closed: true,
+    }
+}
+
+fn line_point(x: f64, y: f64) -> LinePoint {
+    LinePoint {
+        p: point_mm(x, y),
+        bezier: false,
+    }
+}
+
+fn point_mm(x: f64, y: f64) -> Point {
+    Point {
+        x: mm_to_pt(x),
+        y: mm_to_pt(y),
+    }
+}
+
+fn grayscale(value: f32) -> Color {
+    Color::Rgb(PdfRgb {
+        r: value,
+        g: value,
+        b: value,
+        icc_profile: None,
+    })
+}
+
+fn format_mm_label(value: f64) -> String {
+    if value.fract().abs() < f64::EPSILON {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}")
+    }
 }
 
 /// 把毫米转换为 printpdf 变换所需的 PDF 点。

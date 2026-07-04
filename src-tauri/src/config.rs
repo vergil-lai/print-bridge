@@ -12,6 +12,8 @@ pub struct AgentConfig {
     pub printing: PrintingConfig,
     pub limits: LimitsConfig,
     pub app: AppConfig,
+    #[serde(default)]
+    pub remote: RemoteConfig,
 }
 
 /// 本地 HTTP/WebSocket 服务绑定设置。
@@ -50,6 +52,34 @@ pub struct AppConfig {
     pub autostart: bool,
 }
 
+/// 远程任务轮询和状态回报设置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteConfig {
+    pub enabled: bool,
+    pub endpoint_url: Option<String>,
+    pub bearer_token: Option<String>,
+    pub device_id: Option<String>,
+    pub device_name: Option<String>,
+    pub poll_interval_seconds: u64,
+    pub max_report_retries: u32,
+    pub history_retention_days: u32,
+}
+
+impl Default for RemoteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint_url: None,
+            bearer_token: None,
+            device_id: None,
+            device_name: None,
+            poll_interval_seconds: 10,
+            max_report_retries: 10,
+            history_retention_days: 3,
+        }
+    }
+}
+
 impl Default for AgentConfig {
     /// 创建首次运行配置，并使用仅限本机访问的服务默认值。
     fn default() -> Self {
@@ -73,6 +103,7 @@ impl Default for AgentConfig {
                 download_timeout_seconds: 30,
             },
             app: AppConfig { autostart: false },
+            remote: RemoteConfig::default(),
         }
     }
 }
