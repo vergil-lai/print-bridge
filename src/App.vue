@@ -20,14 +20,25 @@ import appIcon from '@/assets/app-icon.png';
 import {
   fetchPapers,
   fetchPrinters,
+  clearTaskHistory,
   getConfig,
-  getLogs,
+  getTaskHistory,
+  getTaskHistoryEvents,
   isDebugBuild,
   printTestPage,
   saveConfig,
   testRemoteConnection,
 } from '@/api';
-import type { AgentConfig, EffectivePaper, PaperInfo, PrinterInfo, TaskLogEntry } from '@/types';
+import type {
+  AgentConfig,
+  EffectivePaper,
+  PaperInfo,
+  PrinterInfo,
+  TaskHistoryEvent,
+  TaskHistoryJob,
+  TaskHistorySource,
+  TaskHistoryStatus,
+} from '@/types';
 import {
   checkForAppUpdate,
   downloadAndInstallAppUpdate,
@@ -88,7 +99,9 @@ type ThemeMode = 'system' | 'light' | 'dark';
 const config = ref<AgentConfig | null>(null);
 const printers = ref<PrinterInfo[]>([]);
 const papers = ref<PaperInfo[]>([]);
-const logs = ref<TaskLogEntry[]>([]);
+const taskHistory = ref<TaskHistoryJob[]>([]);
+const selectedTaskJobId = ref<string | null>(null);
+const selectedTaskEvents = ref<TaskHistoryEvent[]>([]);
 const themeMode = ref<ThemeMode>(readThemeMode());
 const originDraft = ref('');
 const originErrorMessage = ref('');
@@ -97,7 +110,9 @@ const successMessage = ref('');
 const loadingConfig = ref(true);
 const loadingPrinters = ref(false);
 const loadingPapers = ref(false);
-const loadingLogs = ref(false);
+const loadingTaskHistory = ref(false);
+const loadingTaskEvents = ref(false);
+const clearingTaskHistory = ref(false);
 const saving = ref(false);
 const testingPrint = ref(false);
 const testingRemote = ref(false);
@@ -112,6 +127,8 @@ const updateProgress = ref<UpdateProgress>({
   contentLength: null,
 });
 let colorSchemeQuery: MediaQueryList | null = null;
+let taskHistoryRequestId = 0;
+let taskEventsRequestId = 0;
 
 /** UI 请求当前使用的本地服务端口。 */
 const servicePort = computed(() => activePort.value ?? config.value?.service.port ?? 0);
@@ -192,6 +209,10 @@ const selectedPaper = computed({
     };
   },
 });
+/** 当前选中的任务摘要。 */
+const selectedTask = computed(
+  () => taskHistory.value.find((item) => item.job_id === selectedTaskJobId.value) ?? null,
+);
 
 /** 确保加载后的配置始终有可用的默认纸张对象。 */
 function normalizeConfig(value: AgentConfig): AgentConfig {
@@ -341,7 +362,7 @@ function generateRemoteDeviceId(): void {
   config.value.remote.device_id = crypto.randomUUID();
 }
 
-/** 加载配置、打印机、纸张和最近日志，初始化页面状态。 */
+/** 加载配置、打印机、纸张和任务历史，初始化页面状态。 */
 async function loadConfig(): Promise<void> {
   loadingConfig.value = true;
   errorMessage.value = '';
@@ -349,7 +370,7 @@ async function loadConfig(): Promise<void> {
   try {
     config.value = normalizeConfig(await getConfig());
     activePort.value = config.value.service.port;
-    await Promise.all([refreshPrinters(), refreshLogs()]);
+    await Promise.all([refreshPrinters(), refreshTaskHistory()]);
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载配置失败';
   } finally {
@@ -481,16 +502,82 @@ async function handleTestPrint(): Promise<void> {
   }
 }
 
-/** 从本地 Agent 刷新最近任务日志。 */
-async function refreshLogs(): Promise<void> {
-  loadingLogs.value = true;
+/** 从本地 Agent 刷新任务历史。 */
+async function refreshTaskHistory(): Promise<void> {
+  const requestId = ++taskHistoryRequestId;
+  loadingTaskHistory.value = true;
 
   try {
-    logs.value = await getLogs();
+    const nextTaskHistory = await getTaskHistory();
+    if (requestId !== taskHistoryRequestId) return;
+
+    taskHistory.value = nextTaskHistory;
+    errorMessage.value = '';
+    if (selectedTaskJobId.value) {
+      const stillExists = taskHistory.value.some((item) => item.job_id === selectedTaskJobId.value);
+      if (stillExists) {
+        await selectTask(selectedTaskJobId.value);
+      } else {
+        selectedTaskJobId.value = null;
+        selectedTaskEvents.value = [];
+      }
+    }
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '刷新日志失败';
+    if (requestId !== taskHistoryRequestId) return;
+    errorMessage.value = error instanceof Error ? error.message : '任务历史加载失败';
   } finally {
-    loadingLogs.value = false;
+    if (requestId === taskHistoryRequestId) {
+      loadingTaskHistory.value = false;
+    }
+  }
+}
+
+/** 读取单个任务的状态事件。 */
+async function selectTask(jobId: string): Promise<void> {
+  const requestId = ++taskEventsRequestId;
+  selectedTaskJobId.value = jobId;
+  selectedTaskEvents.value = [];
+  loadingTaskEvents.value = true;
+
+  try {
+    const nextEvents = await getTaskHistoryEvents(jobId);
+    if (requestId !== taskEventsRequestId || selectedTaskJobId.value !== jobId) return;
+
+    selectedTaskEvents.value = nextEvents;
+    errorMessage.value = '';
+  } catch (error) {
+    if (requestId !== taskEventsRequestId || selectedTaskJobId.value !== jobId) return;
+    errorMessage.value = error instanceof Error ? error.message : '任务状态加载失败';
+  } finally {
+    if (requestId === taskEventsRequestId && selectedTaskJobId.value === jobId) {
+      loadingTaskEvents.value = false;
+    }
+  }
+}
+
+/** 清空本地任务历史。 */
+async function handleClearTaskHistory(): Promise<void> {
+  const confirmed = window.confirm(
+    '清空任务历史和状态记录？这不会取消正在打印或排队中的任务，也不会删除远程状态上报记录。',
+  );
+  if (!confirmed) return;
+
+  clearingTaskHistory.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    await clearTaskHistory();
+    taskHistoryRequestId++;
+    taskEventsRequestId++;
+    taskHistory.value = [];
+    selectedTaskJobId.value = null;
+    selectedTaskEvents.value = [];
+    successMessage.value = '任务历史已清空';
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '清空任务历史失败';
+  } finally {
+    clearingTaskHistory.value = false;
   }
 }
 
@@ -531,12 +618,39 @@ function removeOrigin(origin: string): void {
   );
 }
 
-/** 格式化 RFC3339 日志时间用于展示。 */
-function formatLogTime(value: string): string {
+/** 格式化 RFC3339 时间用于展示。 */
+function formatDateTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
   return date.toLocaleString();
+}
+
+/** 返回任务状态的中文标签。 */
+function taskStatusLabel(status: TaskHistoryStatus): string {
+  const labels: Record<TaskHistoryStatus, string> = {
+    queued: '已排队',
+    downloading: '下载中',
+    printing: '提交中',
+    submitted: '已提交系统队列',
+    completed: '系统队列已完成',
+    failed: '失败',
+    unknown: '无法确认后续状态',
+    cancelled: '已取消',
+  };
+
+  return labels[status];
+}
+
+/** 返回任务来源的中文标签。 */
+function taskSourceLabel(source: TaskHistorySource): string {
+  const labels: Record<TaskHistorySource, string> = {
+    web_socket: '网页',
+    remote: '远程',
+    test: '测试',
+  };
+
+  return labels[source];
 }
 
 /** 格式化字节数用于更新下载进度展示。 */
@@ -765,7 +879,7 @@ onBeforeUnmount(() => {
           <TabsTrigger value="remote"> 远程 </TabsTrigger>
           <TabsTrigger value="security"> 安全 </TabsTrigger>
           <TabsTrigger value="updates"> 关于 </TabsTrigger>
-          <TabsTrigger value="logs"> 日志 </TabsTrigger>
+          <TabsTrigger value="logs"> 任务 </TabsTrigger>
         </TabsList>
 
         <TabsContent value="settings" class="mt-2">
@@ -1146,48 +1260,128 @@ onBeforeUnmount(() => {
         <TabsContent value="logs" class="mt-2">
           <Card>
             <CardHeader class="flex flex-row items-center justify-between pb-3">
-              <CardTitle class="text-base"> 最近日志 </CardTitle>
-              <Button variant="outline" size="sm" :disabled="loadingLogs" @click="refreshLogs">
-                <RefreshCw class="size-4" :class="{ 'animate-spin': loadingLogs }" />
-                刷新
-              </Button>
+              <CardTitle class="text-base"> 打印任务 </CardTitle>
+              <div class="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="loadingTaskHistory || clearingTaskHistory"
+                  @click="refreshTaskHistory"
+                >
+                  <RefreshCw class="size-4" :class="{ 'animate-spin': loadingTaskHistory }" />
+                  刷新
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="loadingTaskHistory || clearingTaskHistory || taskHistory.length === 0"
+                  @click="handleClearTaskHistory"
+                >
+                  <Trash2 class="size-4" />
+                  清空
+                </Button>
+              </div>
             </CardHeader>
-            <CardContent>
-              <ScrollArea class="h-[360px] rounded-md border">
+            <CardContent class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.8fr)]">
+              <ScrollArea class="h-[420px] rounded-md border">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead class="w-[180px]"> 时间 </TableHead>
-                      <TableHead class="w-[110px]"> 状态 </TableHead>
+                      <TableHead class="w-[170px]"> 时间 </TableHead>
+                      <TableHead class="w-[145px]"> 状态 </TableHead>
+                      <TableHead class="w-[80px]"> 来源 </TableHead>
                       <TableHead class="w-[150px]"> Job </TableHead>
+                      <TableHead class="w-[150px]"> 打印机 </TableHead>
                       <TableHead> 消息 </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    <TableEmpty v-if="logs.length === 0" :colspan="4"> 暂无日志 </TableEmpty>
+                    <TableEmpty v-if="taskHistory.length === 0" :colspan="6">
+                      {{ loadingTaskHistory ? '正在加载任务...' : '暂无任务' }}
+                    </TableEmpty>
                     <TableRow
-                      v-for="entry in logs"
+                      v-for="entry in taskHistory"
                       v-else
-                      :key="`${entry.timestamp}-${entry.job_id ?? entry.message}`"
+                      :key="entry.job_id"
+                      class="cursor-pointer"
+                      :class="{ 'bg-muted/60': selectedTaskJobId === entry.job_id }"
+                      @click="selectTask(entry.job_id)"
                     >
-                      <TableCell class="text-muted-foreground">
-                        {{ formatLogTime(entry.timestamp) }}
+                      <TableCell class="whitespace-nowrap text-muted-foreground">
+                        {{ formatDateTime(entry.updated_at) }}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline">
-                          {{ entry.status }}
+                          {{ taskStatusLabel(entry.current_status) }}
                         </Badge>
                       </TableCell>
-                      <TableCell class="text-muted-foreground">
-                        {{ entry.job_id ?? entry.batch_id ?? entry.request_id ?? '-' }}
+                      <TableCell class="whitespace-nowrap text-muted-foreground">
+                        {{ taskSourceLabel(entry.source) }}
                       </TableCell>
-                      <TableCell>
-                        {{ entry.message }}
+                      <TableCell class="max-w-[150px] truncate font-mono text-xs">
+                        {{ entry.job_id }}
+                      </TableCell>
+                      <TableCell class="max-w-[150px] truncate text-muted-foreground">
+                        {{ entry.printer_name ?? '-' }}
+                      </TableCell>
+                      <TableCell class="min-w-[180px] break-words">
+                        {{ entry.current_message ?? '-' }}
                       </TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>
               </ScrollArea>
+
+              <div class="min-w-0 rounded-md border">
+                <div class="min-w-0 border-b px-3 py-2">
+                  <div class="truncate text-sm font-medium">
+                    {{ selectedTask?.job_id ?? '任务详情' }}
+                  </div>
+                  <div class="mt-1 break-words text-xs text-muted-foreground">
+                    {{
+                      selectedTask
+                        ? `${selectedTask.paper_name ?? '-'} · ${selectedTask.copies ?? '-'} 份`
+                        : '选择左侧任务查看状态'
+                    }}
+                  </div>
+                </div>
+                <ScrollArea class="h-[360px]">
+                  <div v-if="!selectedTaskJobId" class="px-3 py-8 text-sm text-muted-foreground">
+                    暂无选中任务
+                  </div>
+                  <div
+                    v-else-if="loadingTaskEvents"
+                    class="px-3 py-8 text-sm text-muted-foreground"
+                  >
+                    正在加载状态...
+                  </div>
+                  <div
+                    v-else-if="selectedTaskEvents.length === 0"
+                    class="px-3 py-8 text-sm text-muted-foreground"
+                  >
+                    暂无状态记录
+                  </div>
+                  <div v-else class="grid gap-3 p-3">
+                    <div
+                      v-for="event in selectedTaskEvents"
+                      :key="event.id"
+                      class="grid min-w-0 gap-1 border-l-2 border-muted-foreground/30 pl-3"
+                    >
+                      <div class="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline">
+                          {{ taskStatusLabel(event.status) }}
+                        </Badge>
+                        <span class="text-xs text-muted-foreground">
+                          {{ formatDateTime(event.occurred_at) }}
+                        </span>
+                      </div>
+                      <div class="break-words text-sm">
+                        {{ event.message ?? '-' }}
+                      </div>
+                    </div>
+                  </div>
+                </ScrollArea>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
