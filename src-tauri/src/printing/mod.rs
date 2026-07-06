@@ -31,6 +31,23 @@ pub struct PrintOptions {
     pub copies: u16,
 }
 
+/// 平台打印命令成功提交后的可追踪信息。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrintSubmission {
+    pub submitted_at: String,
+    pub backend: String,
+    pub system_job_id: Option<String>,
+    pub tracking_supported: bool,
+}
+
+/// 平台队列追踪的保守结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrintTrackingOutcome {
+    Completed { message: String },
+    Failed { message: String },
+    Unknown { message: String },
+}
+
 /// 平台打印后端返回的错误。
 #[derive(Debug, Error)]
 pub enum PrintError {
@@ -53,7 +70,17 @@ pub trait PrintBackend {
     /// 列出指定打印机的纸张。
     fn list_papers(&self, printer_name: &str) -> PrintResult<Vec<PaperInfo>>;
     /// 把 PDF 文件发送到平台打印队列。
-    fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<()>;
+    fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<PrintSubmission>;
+    /// 查询平台队列对本次提交的保守状态。
+    fn track_submission(
+        &self,
+        _submission: &PrintSubmission,
+        _options: &PrintOptions,
+    ) -> PrintTrackingOutcome {
+        PrintTrackingOutcome::Unknown {
+            message: "platform does not provide trackable print status".to_string(),
+        }
+    }
 }
 
 /// 返回当前目标平台的打印后端。
@@ -98,9 +125,17 @@ impl PrintBackend for UnsupportedPrintBackend {
     }
 
     /// 报告不支持的平台，而不是静默忽略打印任务。
-    fn print_pdf(&self, _path: &Path, _options: &PrintOptions) -> PrintResult<()> {
+    fn print_pdf(&self, _path: &Path, _options: &PrintOptions) -> PrintResult<PrintSubmission> {
         Err(PrintError::UnsupportedPlatform)
     }
+}
+
+/// 返回当前 UTC RFC3339 时间，用于记录平台提交时间。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn submitted_at_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 /// 后端无法枚举纸张时使用的内置常见标签纸尺寸。

@@ -509,7 +509,9 @@ mod tests {
         app_state::AppState,
         config::{AgentConfig, PrintingConfig, SecurityConfig, ServiceConfig},
         logs::TaskLogEntry,
-        printing::{PaperInfo, PrintBackend, PrintOptions, PrintResult, PrinterInfo},
+        printing::{
+            PaperInfo, PrintBackend, PrintOptions, PrintResult, PrintSubmission, PrinterInfo,
+        },
         protocol::{ErrorCode, JobStatus, ServerMessage},
         server::{configured_addr, health, is_ws_origin_allowed},
     };
@@ -818,13 +820,22 @@ mod tests {
             Ok(vec![])
         }
 
-        fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<()> {
+        fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<PrintSubmission> {
             self.calls.lock().unwrap().push(PrintCall {
                 path: path.to_path_buf(),
                 path_bytes: fs::read(path).unwrap(),
                 options: options.clone(),
             });
-            Ok(())
+            Ok(mock_submission())
+        }
+    }
+
+    fn mock_submission() -> PrintSubmission {
+        PrintSubmission {
+            submitted_at: "2026-07-06T00:00:00Z".to_string(),
+            backend: "mock".to_string(),
+            system_job_id: None,
+            tracking_supported: false,
         }
     }
 

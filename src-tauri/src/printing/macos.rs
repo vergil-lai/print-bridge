@@ -1,6 +1,7 @@
 use super::{
-    common_label_papers, cups_media_option, paper_name, resolve_paper_for_print, PaperInfo,
-    PrintBackend, PrintError, PrintOptions, PrintResult, PrinterInfo,
+    common_label_papers, cups_media_option, paper_name, resolve_paper_for_print,
+    submitted_at_rfc3339, PaperInfo, PrintBackend, PrintError, PrintOptions, PrintResult,
+    PrintSubmission, PrintTrackingOutcome, PrinterInfo,
 };
 use std::{path::Path, process::Command};
 
@@ -41,7 +42,7 @@ impl PrintBackend for MacosPrintBackend {
     }
 
     /// 使用明确的份数和介质设置把 PDF 发送给 CUPS。
-    fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<()> {
+    fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<PrintSubmission> {
         ensure_printer_exists(self, &options.printer_name)?;
         let paper = resolve_print_paper(self, options)?;
 
@@ -59,7 +60,14 @@ impl PrintBackend for MacosPrintBackend {
             .map_err(|error| command_error("lp", error.to_string()))?;
 
         if output.status.success() {
-            Ok(())
+            let system_job_id = parse_lp_job_id(&String::from_utf8_lossy(&output.stdout));
+            let tracking_supported = system_job_id.is_some();
+            Ok(PrintSubmission {
+                submitted_at: submitted_at_rfc3339(),
+                backend: "macos-cups".to_string(),
+                system_job_id,
+                tracking_supported,
+            })
         } else {
             Err(command_error(
                 "lp",
@@ -67,6 +75,56 @@ impl PrintBackend for MacosPrintBackend {
             ))
         }
     }
+
+    fn track_submission(
+        &self,
+        submission: &PrintSubmission,
+        _options: &PrintOptions,
+    ) -> PrintTrackingOutcome {
+        let Some(job_id) = submission.system_job_id.as_deref() else {
+            return PrintTrackingOutcome::Unknown {
+                message: "CUPS did not expose a print job id".to_string(),
+            };
+        };
+
+        match Command::new("lpstat")
+            .args(["-W", "completed", "-o"])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                if completed_jobs_contains_job(&String::from_utf8_lossy(&output.stdout), job_id) {
+                    PrintTrackingOutcome::Completed {
+                        message: "CUPS reports the print job as completed".to_string(),
+                    }
+                } else {
+                    PrintTrackingOutcome::Unknown {
+                        message: "CUPS job status was no longer available".to_string(),
+                    }
+                }
+            }
+            Ok(output) => PrintTrackingOutcome::Unknown {
+                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            },
+            Err(error) => PrintTrackingOutcome::Unknown {
+                message: error.to_string(),
+            },
+        }
+    }
+}
+
+fn parse_lp_job_id(output: &str) -> Option<String> {
+    output
+        .split_once("request id is ")
+        .and_then(|(_, request)| request.split_whitespace().next())
+        .map(|part| part.trim_end_matches('.').to_string())
+}
+
+fn completed_jobs_contains_job(output: &str, job_id: &str) -> bool {
+    output.lines().any(|line| {
+        line.split_whitespace()
+            .next()
+            .is_some_and(|token| token.trim_end_matches('.') == job_id)
+    })
 }
 
 /// 把 `lpstat -e` 输出解析为打印机摘要。
@@ -306,7 +364,10 @@ fn run_command(command: &str, args: &[&str]) -> PrintResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_default_destination, parse_lpoptions_papers, parse_lpstat_destinations};
+    use super::{
+        completed_jobs_contains_job, parse_default_destination, parse_lp_job_id,
+        parse_lpoptions_papers, parse_lpstat_destinations,
+    };
 
     #[test]
     fn parses_lpstat_destinations_and_marks_default_printer() {
@@ -340,6 +401,36 @@ mod tests {
             .as_deref(),
             Some("HP_LaserJet_Professional_M1136_MFP")
         );
+    }
+
+    #[test]
+    fn parses_lp_job_id_from_submission_output() {
+        assert_eq!(
+            parse_lp_job_id("request id is HP_LaserJet-42 (1 file(s))\n").as_deref(),
+            Some("HP_LaserJet-42")
+        );
+        assert_eq!(
+            parse_lp_job_id("request id is label-printer-123.\n").as_deref(),
+            Some("label-printer-123")
+        );
+        assert_eq!(
+            parse_lp_job_id("warning cups-2 token\nrequest id is label-printer-123.\n").as_deref(),
+            Some("label-printer-123")
+        );
+        assert_eq!(parse_lp_job_id("lp output without id"), None);
+    }
+
+    #[test]
+    fn completed_jobs_match_exact_job_tokens() {
+        let output = "\
+Printer-10 user 1024 Mon Jul  6 00:00:00 2026
+Printer-123 user 1024 Mon Jul  6 00:00:00 2026
+Printer-2. user 1024 Mon Jul  6 00:00:00 2026
+";
+
+        assert!(!completed_jobs_contains_job(output, "Printer-1"));
+        assert!(completed_jobs_contains_job(output, "Printer-10"));
+        assert!(completed_jobs_contains_job(output, "Printer-2"));
     }
 
     #[test]
