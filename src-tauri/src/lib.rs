@@ -12,6 +12,7 @@ pub mod remote_protocol;
 pub mod remote_store;
 pub mod remote_worker;
 pub mod server;
+pub mod task_history;
 pub mod test_print;
 pub mod tray;
 
