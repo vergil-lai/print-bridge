@@ -227,7 +227,7 @@ async fn print_downloaded_file(
     push_log(
         state,
         queued_job,
-        JobStatus::Success,
+        JobStatus::Submitted,
         "submitted to system print queue",
     )
     .await;
@@ -432,9 +432,12 @@ async fn enqueue_remote_status_event(
 fn remote_status_for_job_status(status: JobStatus) -> Option<RemoteReportStatus> {
     match status {
         JobStatus::Queued => Some(RemoteReportStatus::Accepted),
-        JobStatus::Success => Some(RemoteReportStatus::Success),
+        JobStatus::Submitted => Some(RemoteReportStatus::Success),
         JobStatus::Failed | JobStatus::Cancelled => Some(RemoteReportStatus::Failed),
-        JobStatus::Downloading | JobStatus::Printing => None,
+        JobStatus::Downloading
+        | JobStatus::Printing
+        | JobStatus::Completed
+        | JobStatus::Unknown => None,
     }
 }
 
@@ -596,6 +599,26 @@ mod worker_tests {
             .any(|event| event.status == RemoteReportStatus::Failed));
     }
 
+    #[test]
+    fn remote_status_for_job_status_maps_submitted_to_success() {
+        assert_eq!(
+            super::remote_status_for_job_status(JobStatus::Submitted),
+            Some(RemoteReportStatus::Success)
+        );
+    }
+
+    #[test]
+    fn remote_status_for_job_status_ignores_completed_and_unknown() {
+        assert_eq!(
+            super::remote_status_for_job_status(JobStatus::Completed),
+            None
+        );
+        assert_eq!(
+            super::remote_status_for_job_status(JobStatus::Unknown),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn process_downloaded_job_prints_pdf_with_mock_backend() {
         let pdf_path = temp_path("worker-source.tmp");
@@ -634,7 +657,9 @@ mod worker_tests {
         }
 
         let logs = state.logs.lock().await.recent();
-        assert!(logs.iter().any(|entry| entry.status == JobStatus::Success));
+        assert!(logs
+            .iter()
+            .any(|entry| entry.status == JobStatus::Submitted));
         let _ = fs::remove_file(&pdf_path);
         let _ = fs::remove_file(&pdf_output_path);
     }

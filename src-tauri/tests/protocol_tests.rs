@@ -1,6 +1,6 @@
 use print_bridge_lib::protocol::{
     is_allowed_origin, validate_file_url, validate_origin, ClientMessage, EffectivePaper,
-    ErrorCode, PrintJobInput, SupportedFormat,
+    ErrorCode, JobStatus, PrintJobInput, SupportedFormat,
 };
 use std::str::FromStr;
 
@@ -164,4 +164,25 @@ fn error_code_serializes_as_screaming_snake_case() {
     let json = serde_json::to_string(&ErrorCode::InvalidMessage).unwrap();
 
     assert_eq!(json, r#""INVALID_MESSAGE""#);
+}
+
+#[test]
+fn job_status_submitted_serializes_as_submitted() {
+    let json = serde_json::to_string(&JobStatus::Submitted).unwrap();
+
+    assert_eq!(json, r#""submitted""#);
+}
+
+#[test]
+fn job_status_completed_deserializes_from_completed() {
+    let status: JobStatus = serde_json::from_str(r#""completed""#).unwrap();
+
+    assert_eq!(status, JobStatus::Completed);
+}
+
+#[test]
+fn job_status_unknown_deserializes_from_unknown() {
+    let status: JobStatus = serde_json::from_str(r#""unknown""#).unwrap();
+
+    assert_eq!(status, JobStatus::Unknown);
 }

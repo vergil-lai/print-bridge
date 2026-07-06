@@ -141,8 +141,10 @@ pub enum JobStatus {
     Queued,
     Downloading,
     Printing,
-    Success,
+    Submitted,
+    Completed,
     Failed,
+    Unknown,
     Cancelled,
 }
 

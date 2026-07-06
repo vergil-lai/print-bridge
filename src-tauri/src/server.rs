@@ -785,6 +785,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn job_status_message_serializes_submitted_status() {
+        let json = serde_json::to_string(&ServerMessage::JobStatus {
+            request_id: Some("request-1".to_string()),
+            job_id: "job-1".to_string(),
+            status: JobStatus::Submitted,
+            message: Some("submitted to system print queue".to_string()),
+        })
+        .unwrap();
+
+        assert!(json.contains(r#""status":"submitted""#));
+        assert!(!json.contains(r#""status":"success""#));
+    }
+
     struct MockPrintBackend {
         calls: Arc<Mutex<Vec<PrintCall>>>,
     }
