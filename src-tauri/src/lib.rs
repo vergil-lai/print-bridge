@@ -43,8 +43,12 @@ pub fn run() {
             let remote_store =
                 remote_store::RemoteStore::open(&app_config_dir.join("remote.sqlite3"))
                     .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+            let task_history =
+                task_history::TaskHistoryStore::open(&app_config_dir.join("task_history.sqlite3"))
+                    .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
             let state = AppState::with_config_path_and_printing(config, config_path, printing)
-                .with_remote_store(remote_store);
+                .with_remote_store(remote_store)
+                .with_task_history_store(task_history);
             let server_state = state.clone();
             let worker_state = state.clone();
             let remote_worker_state = state.clone();
@@ -80,6 +84,9 @@ pub fn run() {
             commands::save_config,
             commands::test_remote_connection,
             commands::get_logs,
+            commands::get_task_history,
+            commands::get_task_history_events,
+            commands::clear_task_history,
             commands::is_debug_build,
             commands::print_test
         ])

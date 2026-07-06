@@ -6,6 +6,7 @@ use crate::{
     protocol::validate_origin,
     queue::QueueState,
     remote_store::RemoteStore,
+    task_history::TaskHistoryStore,
 };
 use std::{io, path::PathBuf, sync::Arc};
 use tokio::sync::{broadcast, Mutex, Notify, RwLock};
@@ -25,6 +26,7 @@ pub struct AppState {
     pub print_lock: Arc<Mutex<()>>,
     pub printing: Arc<dyn PrintBackend + Send + Sync>,
     pub remote_store: Option<Arc<RemoteStore>>,
+    pub task_history: Option<Arc<TaskHistoryStore>>,
 }
 
 impl AppState {
@@ -73,12 +75,19 @@ impl AppState {
             print_lock: Arc::new(Mutex::new(())),
             printing: Arc::from(printing),
             remote_store: None,
+            task_history: None,
         }
     }
 
     /// 注入远程任务 SQLite 存储，供生产启动和相关测试使用。
     pub fn with_remote_store(mut self, remote_store: RemoteStore) -> Self {
         self.remote_store = Some(Arc::new(remote_store));
+        self
+    }
+
+    /// 注入任务历史 SQLite 存储，供生产启动和相关测试使用。
+    pub fn with_task_history_store(mut self, task_history: TaskHistoryStore) -> Self {
+        self.task_history = Some(Arc::new(task_history));
         self
     }
 
