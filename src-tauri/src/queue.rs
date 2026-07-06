@@ -727,7 +727,7 @@ mod worker_tests {
 
     #[tokio::test]
     async fn process_downloaded_job_prints_pdf_with_mock_backend() {
-        let pdf_path = temp_path("worker-source.tmp");
+        let pdf_path = temp_path("worker-pdf-source.tmp");
         let _ = fs::remove_file(&pdf_path);
         let pdf_output_path = pdf_path.with_extension("pdf");
         let _ = fs::remove_file(&pdf_output_path);
@@ -882,7 +882,7 @@ mod worker_tests {
 
     #[tokio::test]
     async fn process_downloaded_job_converts_image_to_pdf_before_printing() {
-        let image_path = temp_path("worker-source.png");
+        let image_path = temp_path("worker-image-source.png");
         let _ = fs::remove_file(&image_path);
         let image = ImageBuffer::from_pixel(2, 1, Rgb([255_u8, 0, 0]));
         image.save(&image_path).unwrap();
