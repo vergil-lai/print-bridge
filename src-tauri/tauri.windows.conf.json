@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/windows/SumatraPDF.exe": "SumatraPDF.exe"
+    }
+  }
+}
