@@ -1,6 +1,7 @@
 use super::{
-    common_label_papers, resolve_paper_for_print, sumatra_print_settings, PaperInfo, PrintBackend,
-    PrintError, PrintOptions, PrintResult, PrinterInfo,
+    common_label_papers, resolve_paper_for_print, submitted_at_rfc3339, sumatra_print_settings,
+    PaperInfo, PrintBackend, PrintError, PrintOptions, PrintResult, PrintSubmission,
+    PrintTrackingOutcome, PrinterInfo,
 };
 use serde::Deserialize;
 use std::{
@@ -61,7 +62,7 @@ impl PrintBackend for WindowsPrintBackend {
     }
 
     /// 使用明确的打印机和纸张设置把 PDF 发送给 SumatraPDF。
-    fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<()> {
+    fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<PrintSubmission> {
         ensure_printer_exists(self, &options.printer_name)?;
         let paper = resolve_print_paper(self, options)?;
 
@@ -77,12 +78,28 @@ impl PrintBackend for WindowsPrintBackend {
             .map_err(|error| command_error("SumatraPDF.exe", error.to_string()))?;
 
         if output.status.success() {
-            Ok(())
+            Ok(PrintSubmission {
+                submitted_at: submitted_at_rfc3339(),
+                backend: "windows-sumatra".to_string(),
+                system_job_id: None,
+                tracking_supported: false,
+            })
         } else {
             Err(command_error(
                 "SumatraPDF.exe",
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
             ))
+        }
+    }
+
+    fn track_submission(
+        &self,
+        _submission: &PrintSubmission,
+        _options: &PrintOptions,
+    ) -> PrintTrackingOutcome {
+        PrintTrackingOutcome::Unknown {
+            message: "Windows SumatraPDF submission did not expose a system print job id"
+                .to_string(),
         }
     }
 }

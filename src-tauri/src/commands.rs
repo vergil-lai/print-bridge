@@ -1,5 +1,9 @@
 use crate::{
-    app_state::AppState, config::AgentConfig, logs::TaskLogEntry, remote_client::RemoteClient,
+    app_state::AppState,
+    config::AgentConfig,
+    logs::TaskLogEntry,
+    remote_client::RemoteClient,
+    task_history::{TaskHistoryEvent, TaskHistoryJob},
     test_print::print_calibration_page_with_config,
 };
 use tauri::State;
@@ -69,6 +73,50 @@ pub async fn get_logs(state: State<'_, AppState>) -> Result<Vec<TaskLogEntry>, S
     Ok(state.logs.lock().await.recent())
 }
 
+#[tauri::command]
+pub async fn get_task_history(state: State<'_, AppState>) -> Result<Vec<TaskHistoryJob>, String> {
+    get_task_history_for_state(&state)
+}
+
+#[tauri::command]
+pub async fn get_task_history_events(
+    job_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<TaskHistoryEvent>, String> {
+    get_task_history_events_for_state(&job_id, &state)
+}
+
+#[tauri::command]
+pub async fn clear_task_history(state: State<'_, AppState>) -> Result<(), String> {
+    clear_task_history_for_state(&state)
+}
+
+pub(crate) fn get_task_history_for_state(state: &AppState) -> Result<Vec<TaskHistoryJob>, String> {
+    let Some(store) = &state.task_history else {
+        return Ok(Vec::new());
+    };
+    store.recent_jobs(500).map_err(|error| error.to_string())
+}
+
+pub(crate) fn get_task_history_events_for_state(
+    job_id: &str,
+    state: &AppState,
+) -> Result<Vec<TaskHistoryEvent>, String> {
+    let Some(store) = &state.task_history else {
+        return Ok(Vec::new());
+    };
+    store
+        .events_for_job(job_id)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn clear_task_history_for_state(state: &AppState) -> Result<(), String> {
+    let Some(store) = &state.task_history else {
+        return Ok(());
+    };
+    store.clear().map_err(|error| error.to_string())
+}
+
 /// 使用当前 Agent 默认打印设置提交一张校准测试页。
 #[tauri::command]
 pub async fn print_test(config: AgentConfig, state: State<'_, AppState>) -> Result<(), String> {
@@ -79,8 +127,17 @@ pub async fn print_test(config: AgentConfig, state: State<'_, AppState>) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::save_config_for_state;
-    use crate::{app_state::AppState, config::AgentConfig};
+    use super::{
+        clear_task_history_for_state, get_task_history_events_for_state,
+        get_task_history_for_state, save_config_for_state,
+    };
+    use crate::{
+        app_state::AppState,
+        config::AgentConfig,
+        task_history::{
+            NewTaskHistoryEvent, TaskHistorySource, TaskHistoryStatus, TaskHistoryStore,
+        },
+    };
     use std::fs;
 
     #[tokio::test]
@@ -142,5 +199,51 @@ mod tests {
         assert!(!path.exists());
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn task_history_commands_return_empty_without_store() {
+        let state = AppState::new(AgentConfig::default());
+
+        assert!(get_task_history_for_state(&state).unwrap().is_empty());
+        assert!(get_task_history_events_for_state("job-1", &state)
+            .unwrap()
+            .is_empty());
+        clear_task_history_for_state(&state).unwrap();
+    }
+
+    #[test]
+    fn task_history_commands_read_events_and_clear_store() {
+        let store = TaskHistoryStore::open_in_memory().unwrap();
+        store
+            .record_event(&NewTaskHistoryEvent {
+                job_id: "job-1",
+                request_id: Some("request-1"),
+                batch_id: None,
+                source: TaskHistorySource::Test,
+                status: TaskHistoryStatus::Queued,
+                message: Some("queued"),
+                printer_name: Some("Office Printer"),
+                paper_name: Some("A4"),
+                copies: Some(1),
+                occurred_at: "2026-07-06T10:00:00Z",
+            })
+            .unwrap();
+        let state = AppState::new(AgentConfig::default()).with_task_history_store(store);
+
+        let jobs = get_task_history_for_state(&state).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].job_id, "job-1");
+        assert_eq!(jobs[0].source, TaskHistorySource::Test);
+
+        let events = get_task_history_events_for_state("job-1", &state).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status, TaskHistoryStatus::Queued);
+
+        clear_task_history_for_state(&state).unwrap();
+        assert!(get_task_history_for_state(&state).unwrap().is_empty());
+        assert!(get_task_history_events_for_state("job-1", &state)
+            .unwrap()
+            .is_empty());
     }
 }

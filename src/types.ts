@@ -63,3 +63,38 @@ export interface TaskLogEntry {
   status: string;
   message: string;
 }
+
+export type TaskHistoryStatus =
+  | 'queued'
+  | 'downloading'
+  | 'printing'
+  | 'submitted'
+  | 'completed'
+  | 'failed'
+  | 'unknown'
+  | 'cancelled';
+
+export type TaskHistorySource = 'web_socket' | 'remote' | 'test';
+
+export interface TaskHistoryJob {
+  job_id: string;
+  request_id: string | null;
+  batch_id: string | null;
+  source: TaskHistorySource;
+  current_status: TaskHistoryStatus;
+  current_message: string | null;
+  printer_name: string | null;
+  paper_name: string | null;
+  copies: number | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+export interface TaskHistoryEvent {
+  id: number;
+  job_id: string;
+  status: TaskHistoryStatus;
+  message: string | null;
+  occurred_at: string;
+}

@@ -1,5 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AgentConfig, PaperInfo, PrinterInfo, TaskLogEntry } from '@/types';
+import type {
+  AgentConfig,
+  PaperInfo,
+  PrinterInfo,
+  TaskHistoryEvent,
+  TaskHistoryJob,
+  TaskLogEntry,
+} from '@/types';
 
 interface PapersResponse {
   papers: PaperInfo[];
@@ -44,6 +51,21 @@ export function isDebugBuild(): Promise<boolean> {
 /** 读取本地 Agent 保留的最近任务日志。 */
 export function getLogs(): Promise<TaskLogEntry[]> {
   return invoke<TaskLogEntry[]>('get_logs');
+}
+
+/** 读取最近任务历史。 */
+export function getTaskHistory(): Promise<TaskHistoryJob[]> {
+  return invoke<TaskHistoryJob[]>('get_task_history');
+}
+
+/** 读取指定任务的历史事件。 */
+export function getTaskHistoryEvents(jobId: string): Promise<TaskHistoryEvent[]> {
+  return invoke<TaskHistoryEvent[]>('get_task_history_events', { jobId });
+}
+
+/** 清空本地任务历史。 */
+export function clearTaskHistory(): Promise<void> {
+  return invoke<void>('clear_task_history');
 }
 
 /** 从本地 HTTP 服务读取打印机列表。 */
