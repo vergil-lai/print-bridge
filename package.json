@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "vite",
     "prepare": "husky",
+    "release": "node scripts/release.mjs",
+    "release:app": "node scripts/release.mjs app",
     "lint": "oxlint src vite.config.ts",
     "lint:fix": "oxlint --fix src vite.config.ts",
     "format": "oxfmt --write \"src/**/*\" vite.config.ts tsconfig.json tsconfig.node.json",

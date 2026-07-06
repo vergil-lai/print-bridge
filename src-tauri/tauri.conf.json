@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk1NDcxN0M3NzBFMzY3NEYKUldSUForTnd4eGRIbGZvV3dqSUdlU3kzR1hRRytPZlpHcUZLZGdOanpsZWZjM0UvK3BtelZ6WGwK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUzREM0MzUxOTIxM0UxNTIKUldSUzRST1NVVVBjVXhZWnd4NzZwNmpSV3hyNVFPYllWQnE0UVBZSjEwUmFzSzFwUkVuWXlKb1gK",
       "endpoints": [
         "https://github.com/vergil-lai/print-bridge/releases/latest/download/latest.json"
       ]
