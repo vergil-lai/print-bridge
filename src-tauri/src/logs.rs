@@ -52,4 +52,9 @@ impl LogStore {
     pub fn recent(&self) -> Vec<TaskLogEntry> {
         self.entries.iter().cloned().collect()
     }
+
+    /// 清空当前保留的内存日志。
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 }

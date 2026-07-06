@@ -1,3 +1,4 @@
+use crate::printing::{PaperInfo, PrinterInfo};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use thiserror::Error;
@@ -99,6 +100,15 @@ fn default_copies() -> u16 {
 pub enum ClientMessage {
     #[serde(rename = "ping")]
     Ping { time: i64 },
+    #[serde(rename = "get_printers_list")]
+    GetPrintersList { request_id: String },
+    #[serde(rename = "get_printer_info")]
+    GetPrinterInfo {
+        request_id: String,
+        printer_name: String,
+    },
+    #[serde(rename = "get_print_queue")]
+    GetPrintQueue { request_id: String },
     #[serde(rename = "print")]
     Print {
         request_id: String,
@@ -119,6 +129,21 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     #[serde(rename = "pong")]
     Pong { time: i64, agent_status: String },
+    #[serde(rename = "printers_list")]
+    PrintersList {
+        request_id: String,
+        printers: Vec<PrinterInfo>,
+    },
+    #[serde(rename = "printer_info")]
+    PrinterInfo {
+        request_id: String,
+        printer: PrinterDetails,
+    },
+    #[serde(rename = "print_queue")]
+    PrintQueue {
+        request_id: String,
+        jobs: Vec<PrintQueueJobInfo>,
+    },
     #[serde(rename = "job_status")]
     JobStatus {
         request_id: Option<String>,
@@ -132,6 +157,24 @@ pub enum ServerMessage {
         error_code: ErrorCode,
         message: String,
     },
+}
+
+/// 单台打印机及其可用纸张的 WebSocket 响应体。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrinterDetails {
+    pub name: String,
+    pub is_default: bool,
+    pub papers: Vec<PaperInfo>,
+}
+
+/// 当前内存打印队列中的任务摘要。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrintQueueJobInfo {
+    pub request_id: String,
+    pub batch_id: Option<String>,
+    pub job_id: String,
+    pub status: JobStatus,
+    pub message: Option<String>,
 }
 
 /// 协议和本地日志中暴露的打印任务状态。

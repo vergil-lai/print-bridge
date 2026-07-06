@@ -88,7 +88,7 @@ pub async fn get_task_history_events(
 
 #[tauri::command]
 pub async fn clear_task_history(state: State<'_, AppState>) -> Result<(), String> {
-    clear_task_history_for_state(&state)
+    clear_task_history_for_state(&state).await
 }
 
 pub(crate) fn get_task_history_for_state(state: &AppState) -> Result<Vec<TaskHistoryJob>, String> {
@@ -110,7 +110,9 @@ pub(crate) fn get_task_history_events_for_state(
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn clear_task_history_for_state(state: &AppState) -> Result<(), String> {
+pub(crate) async fn clear_task_history_for_state(state: &AppState) -> Result<(), String> {
+    state.logs.lock().await.clear();
+
     let Some(store) = &state.task_history else {
         return Ok(());
     };
@@ -134,6 +136,8 @@ mod tests {
     use crate::{
         app_state::AppState,
         config::AgentConfig,
+        logs::TaskLogEntry,
+        protocol::JobStatus,
         task_history::{
             NewTaskHistoryEvent, TaskHistorySource, TaskHistoryStatus, TaskHistoryStore,
         },
@@ -201,19 +205,19 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    #[test]
-    fn task_history_commands_return_empty_without_store() {
+    #[tokio::test]
+    async fn task_history_commands_return_empty_without_store() {
         let state = AppState::new(AgentConfig::default());
 
         assert!(get_task_history_for_state(&state).unwrap().is_empty());
         assert!(get_task_history_events_for_state("job-1", &state)
             .unwrap()
             .is_empty());
-        clear_task_history_for_state(&state).unwrap();
+        clear_task_history_for_state(&state).await.unwrap();
     }
 
-    #[test]
-    fn task_history_commands_read_events_and_clear_store() {
+    #[tokio::test]
+    async fn task_history_commands_read_events_and_clear_store() {
         let store = TaskHistoryStore::open_in_memory().unwrap();
         store
             .record_event(&NewTaskHistoryEvent {
@@ -240,10 +244,28 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].status, TaskHistoryStatus::Queued);
 
-        clear_task_history_for_state(&state).unwrap();
+        clear_task_history_for_state(&state).await.unwrap();
         assert!(get_task_history_for_state(&state).unwrap().is_empty());
         assert!(get_task_history_events_for_state("job-1", &state)
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_task_history_for_state_clears_recent_logs() {
+        let state = AppState::new(AgentConfig::default());
+        state.logs.lock().await.push(TaskLogEntry {
+            timestamp: "2026-07-06T10:00:00Z".to_string(),
+            request_id: Some("request-1".to_string()),
+            batch_id: None,
+            job_id: Some("job-1".to_string()),
+            origin: Some("http://localhost:5173".to_string()),
+            status: JobStatus::Queued,
+            message: "queued".to_string(),
+        });
+
+        clear_task_history_for_state(&state).await.unwrap();
+
+        assert!(state.logs.lock().await.recent().is_empty());
     }
 }

@@ -113,6 +113,7 @@ const loadingPapers = ref(false);
 const loadingTaskHistory = ref(false);
 const loadingTaskEvents = ref(false);
 const clearingTaskHistory = ref(false);
+const confirmingClearTaskHistory = ref(false);
 const saving = ref(false);
 const testingPrint = ref(false);
 const testingRemote = ref(false);
@@ -504,6 +505,7 @@ async function handleTestPrint(): Promise<void> {
 
 /** 从本地 Agent 刷新任务历史。 */
 async function refreshTaskHistory(): Promise<void> {
+  confirmingClearTaskHistory.value = false;
   const requestId = ++taskHistoryRequestId;
   loadingTaskHistory.value = true;
 
@@ -557,10 +559,12 @@ async function selectTask(jobId: string): Promise<void> {
 
 /** 清空本地任务历史。 */
 async function handleClearTaskHistory(): Promise<void> {
-  const confirmed = window.confirm(
-    '清空任务历史和状态记录？这不会取消正在打印或排队中的任务，也不会删除远程状态上报记录。',
-  );
-  if (!confirmed) return;
+  if (!confirmingClearTaskHistory.value) {
+    confirmingClearTaskHistory.value = true;
+    errorMessage.value = '';
+    successMessage.value = '';
+    return;
+  }
 
   clearingTaskHistory.value = true;
   errorMessage.value = '';
@@ -573,8 +577,10 @@ async function handleClearTaskHistory(): Promise<void> {
     taskHistory.value = [];
     selectedTaskJobId.value = null;
     selectedTaskEvents.value = [];
+    confirmingClearTaskHistory.value = false;
     successMessage.value = '任务历史已清空';
   } catch (error) {
+    confirmingClearTaskHistory.value = false;
     errorMessage.value = error instanceof Error ? error.message : '清空任务历史失败';
   } finally {
     clearingTaskHistory.value = false;
@@ -878,8 +884,8 @@ onBeforeUnmount(() => {
           <TabsTrigger value="settings"> 设置 </TabsTrigger>
           <TabsTrigger value="remote"> 远程 </TabsTrigger>
           <TabsTrigger value="security"> 安全 </TabsTrigger>
-          <TabsTrigger value="updates"> 关于 </TabsTrigger>
           <TabsTrigger value="logs"> 任务 </TabsTrigger>
+          <TabsTrigger value="updates"> 关于 </TabsTrigger>
         </TabsList>
 
         <TabsContent value="settings" class="mt-2">
@@ -1272,13 +1278,13 @@ onBeforeUnmount(() => {
                   刷新
                 </Button>
                 <Button
-                  variant="outline"
+                  :variant="confirmingClearTaskHistory ? 'destructive' : 'outline'"
                   size="sm"
                   :disabled="loadingTaskHistory || clearingTaskHistory || taskHistory.length === 0"
                   @click="handleClearTaskHistory"
                 >
                   <Trash2 class="size-4" />
-                  清空
+                  {{ confirmingClearTaskHistory ? '确认清空' : '清空' }}
                 </Button>
               </div>
             </CardHeader>

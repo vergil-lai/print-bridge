@@ -3,7 +3,10 @@ use crate::{
     config::AgentConfig,
     logs::TaskLogEntry,
     printing::{PaperInfo, PrintError, PrinterInfo},
-    protocol::{is_allowed_origin, ClientMessage, ErrorCode, JobStatus, ServerMessage},
+    protocol::{
+        is_allowed_origin, ClientMessage, ErrorCode, JobStatus, PrintQueueJobInfo, PrinterDetails,
+        ServerMessage,
+    },
     queue::QueueError,
     test_print::{print_calibration_page, TestPrintError},
 };
@@ -327,6 +330,70 @@ async fn handle_client_text(state: &AppState, text: &str) -> ClientTextOutcome {
             time,
             agent_status: "ready".to_string(),
         }),
+        ClientMessage::GetPrintersList { request_id } => match state.printing.list_printers() {
+            Ok(printers) => ClientTextOutcome::response(ServerMessage::PrintersList {
+                request_id,
+                printers,
+            }),
+            Err(error) => {
+                ClientTextOutcome::response(print_error_response(Some(request_id), error))
+            }
+        },
+        ClientMessage::GetPrinterInfo {
+            request_id,
+            printer_name,
+        } => {
+            let printer = match state.printing.list_printers() {
+                Ok(printers) => printers
+                    .into_iter()
+                    .find(|printer| printer.name == printer_name),
+                Err(error) => {
+                    return ClientTextOutcome::response(print_error_response(
+                        Some(request_id),
+                        error,
+                    ));
+                }
+            };
+
+            let Some(printer) = printer else {
+                return ClientTextOutcome::response(print_error_response(
+                    Some(request_id),
+                    PrintError::PrinterNotFound(printer_name),
+                ));
+            };
+
+            match state.printing.list_papers(&printer.name) {
+                Ok(papers) => ClientTextOutcome::response(ServerMessage::PrinterInfo {
+                    request_id,
+                    printer: PrinterDetails {
+                        name: printer.name,
+                        is_default: printer.is_default,
+                        papers,
+                    },
+                }),
+                Err(error) => {
+                    ClientTextOutcome::response(print_error_response(Some(request_id), error))
+                }
+            }
+        }
+        ClientMessage::GetPrintQueue { request_id } => {
+            let jobs = state
+                .queue
+                .lock()
+                .await
+                .pending_jobs()
+                .into_iter()
+                .map(|queued| PrintQueueJobInfo {
+                    request_id: queued.request_id,
+                    batch_id: queued.batch_id,
+                    job_id: queued.job.job_id,
+                    status: JobStatus::Queued,
+                    message: Some("queued".to_string()),
+                })
+                .collect();
+
+            ClientTextOutcome::response(ServerMessage::PrintQueue { request_id, jobs })
+        }
         ClientMessage::Print { request_id, job } => {
             let job_id = job.job_id.clone();
             let result = state.queue.lock().await.accept_job(request_id.clone(), job);
@@ -419,6 +486,23 @@ fn queue_error_response(request_id: Option<String>, error: QueueError) -> Server
     let error_code = match error {
         QueueError::DuplicateJobId => ErrorCode::JobDuplicated,
         QueueError::DuplicateBatchId => ErrorCode::BatchDuplicated,
+    };
+
+    ServerMessage::Error {
+        request_id,
+        error_code,
+        message: error.to_string(),
+    }
+}
+
+/// 把打印后端错误映射为 WebSocket 协议错误消息。
+fn print_error_response(request_id: Option<String>, error: PrintError) -> ServerMessage {
+    let error_code = match error {
+        PrintError::PrinterNotFound(_) => ErrorCode::PrinterNotFound,
+        PrintError::PaperNotFound(_) => ErrorCode::PaperNotFound,
+        PrintError::UnsupportedPlatform | PrintError::CommandFailed { .. } => {
+            ErrorCode::PrintFailed
+        }
     };
 
     ServerMessage::Error {
@@ -799,6 +883,138 @@ mod tests {
 
         assert!(json.contains(r#""status":"submitted""#));
         assert!(!json.contains(r#""status":"success""#));
+    }
+
+    #[tokio::test]
+    async fn websocket_get_printers_list_returns_backend_printers() {
+        let state = AppState::with_printing(
+            AgentConfig::default(),
+            Box::new(ListingPrintBackend {
+                printers: vec![PrinterInfo {
+                    name: "Zebra ZD421".to_string(),
+                    is_default: true,
+                }],
+                papers: vec![],
+            }),
+        );
+
+        let outcome = super::handle_client_text(
+            &state,
+            r#"{"type":"get_printers_list","request_id":"REQ-PRINTERS"}"#,
+        )
+        .await;
+
+        assert_eq!(
+            outcome.response,
+            ServerMessage::PrintersList {
+                request_id: "REQ-PRINTERS".to_string(),
+                printers: vec![PrinterInfo {
+                    name: "Zebra ZD421".to_string(),
+                    is_default: true,
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_get_printer_info_returns_backend_papers() {
+        let state = AppState::with_printing(
+            AgentConfig::default(),
+            Box::new(ListingPrintBackend {
+                printers: vec![PrinterInfo {
+                    name: "Zebra ZD421".to_string(),
+                    is_default: true,
+                }],
+                papers: vec![PaperInfo {
+                    id: "label_60x40".to_string(),
+                    name: "60 x 40 mm".to_string(),
+                    width_mm: 60.0,
+                    height_mm: 40.0,
+                }],
+            }),
+        );
+
+        let outcome = super::handle_client_text(
+            &state,
+            r#"{"type":"get_printer_info","request_id":"REQ-INFO","printer_name":"Zebra ZD421"}"#,
+        )
+        .await;
+
+        assert_eq!(
+            outcome.response,
+            ServerMessage::PrinterInfo {
+                request_id: "REQ-INFO".to_string(),
+                printer: super::PrinterDetails {
+                    name: "Zebra ZD421".to_string(),
+                    is_default: true,
+                    papers: vec![PaperInfo {
+                        id: "label_60x40".to_string(),
+                        name: "60 x 40 mm".to_string(),
+                        width_mm: 60.0,
+                        height_mm: 40.0,
+                    }],
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_get_print_queue_returns_pending_jobs() {
+        let state = AppState::new(AgentConfig::default());
+        state
+            .queue
+            .lock()
+            .await
+            .accept_job(
+                "REQ-QUEUE-ITEM".to_string(),
+                crate::protocol::PrintJobInput {
+                    job_id: "JOB-QUEUE-ITEM".to_string(),
+                    format: crate::protocol::SupportedFormat::Pdf,
+                    file_url: "https://example.com/label.pdf".to_string(),
+                    copies: 1,
+                    paper: None,
+                },
+            )
+            .unwrap();
+
+        let outcome = super::handle_client_text(
+            &state,
+            r#"{"type":"get_print_queue","request_id":"REQ-QUEUE"}"#,
+        )
+        .await;
+
+        assert_eq!(
+            outcome.response,
+            ServerMessage::PrintQueue {
+                request_id: "REQ-QUEUE".to_string(),
+                jobs: vec![super::PrintQueueJobInfo {
+                    request_id: "REQ-QUEUE-ITEM".to_string(),
+                    batch_id: None,
+                    job_id: "JOB-QUEUE-ITEM".to_string(),
+                    status: JobStatus::Queued,
+                    message: Some("queued".to_string()),
+                }],
+            }
+        );
+    }
+
+    struct ListingPrintBackend {
+        printers: Vec<PrinterInfo>,
+        papers: Vec<PaperInfo>,
+    }
+
+    impl PrintBackend for ListingPrintBackend {
+        fn list_printers(&self) -> PrintResult<Vec<PrinterInfo>> {
+            Ok(self.printers.clone())
+        }
+
+        fn list_papers(&self, _printer_name: &str) -> PrintResult<Vec<PaperInfo>> {
+            Ok(self.papers.clone())
+        }
+
+        fn print_pdf(&self, _path: &Path, _options: &PrintOptions) -> PrintResult<PrintSubmission> {
+            Ok(mock_submission())
+        }
     }
 
     struct MockPrintBackend {

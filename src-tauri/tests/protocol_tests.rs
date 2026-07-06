@@ -124,6 +124,53 @@ fn print_job_input_requires_job_id_but_paper_is_optional() {
 }
 
 #[test]
+fn parses_printer_and_queue_query_messages() {
+    let printers: ClientMessage = serde_json::from_str(
+        r#"{
+            "type": "get_printers_list",
+            "request_id": "REQ-PRINTERS"
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        printers,
+        ClientMessage::GetPrintersList {
+            request_id: "REQ-PRINTERS".to_string(),
+        }
+    );
+
+    let printer_info: ClientMessage = serde_json::from_str(
+        r#"{
+            "type": "get_printer_info",
+            "request_id": "REQ-INFO",
+            "printer_name": "Zebra ZD421"
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        printer_info,
+        ClientMessage::GetPrinterInfo {
+            request_id: "REQ-INFO".to_string(),
+            printer_name: "Zebra ZD421".to_string(),
+        }
+    );
+
+    let queue: ClientMessage = serde_json::from_str(
+        r#"{
+            "type": "get_print_queue",
+            "request_id": "REQ-QUEUE"
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        queue,
+        ClientMessage::GetPrintQueue {
+            request_id: "REQ-QUEUE".to_string(),
+        }
+    );
+}
+
+#[test]
 fn print_job_input_rejects_missing_job_id() {
     let json = r#"{
         "file_url": "https://example.com/document.pdf",

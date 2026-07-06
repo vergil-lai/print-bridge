@@ -137,6 +137,11 @@ impl QueueState {
     pub fn pop_next(&mut self) -> Option<QueuedJob> {
         self.pending.pop_front()
     }
+
+    /// 返回当前尚未被 worker 取走的内存队列快照。
+    pub fn pending_jobs(&self) -> Vec<QueuedJob> {
+        self.pending.iter().cloned().collect()
+    }
 }
 
 /// 转换为状态日志前的 worker 内部错误。
@@ -240,6 +245,10 @@ async fn print_downloaded_file(
         Some(options),
     )
     .await;
+
+    if !submission.tracking_supported {
+        return Ok(());
+    }
 
     let (tracking_status, tracking_message) =
         match state.printing.track_submission(&submission, options) {
@@ -771,7 +780,7 @@ mod worker_tests {
     }
 
     #[tokio::test]
-    async fn process_downloaded_job_records_submitted_and_unknown_tracking_history() {
+    async fn process_downloaded_job_keeps_submitted_status_when_tracking_is_unsupported() {
         let pdf_path = temp_path("worker-history-source.tmp");
         let _ = fs::remove_file(&pdf_path);
         let pdf_output_path = pdf_path.with_extension("pdf");
@@ -803,7 +812,7 @@ mod worker_tests {
             .unwrap()
             .recent_jobs(500)
             .unwrap();
-        assert_eq!(jobs[0].current_status, TaskHistoryStatus::Unknown);
+        assert_eq!(jobs[0].current_status, TaskHistoryStatus::Submitted);
         assert_eq!(jobs[0].printer_name.as_deref(), Some("Printer A"));
         assert_eq!(jobs[0].paper_name.as_deref(), Some("80 x 50 mm"));
         assert_eq!(jobs[0].copies, Some(2));
@@ -816,7 +825,7 @@ mod worker_tests {
         assert!(events
             .iter()
             .any(|event| event.status == TaskHistoryStatus::Submitted));
-        assert!(events
+        assert!(!events
             .iter()
             .any(|event| event.status == TaskHistoryStatus::Unknown));
 
