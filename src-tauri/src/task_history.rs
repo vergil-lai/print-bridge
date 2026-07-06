@@ -1,6 +1,9 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::{path::Path, sync::Mutex};
+use std::{
+    path::Path,
+    sync::{Mutex, MutexGuard},
+};
 
 #[derive(Debug)]
 pub struct TaskHistoryStore {
@@ -85,8 +88,12 @@ impl TaskHistoryStore {
         Ok(store)
     }
 
+    fn lock_conn(&self) -> rusqlite::Result<MutexGuard<'_, Connection>> {
+        self.conn.lock().map_err(|_| rusqlite::Error::InvalidQuery)
+    }
+
     pub fn record_event(&self, event: &NewTaskHistoryEvent<'_>) -> rusqlite::Result<()> {
-        let mut conn = self.conn.lock().expect("task history store mutex poisoned");
+        let mut conn = self.lock_conn()?;
         let transaction = conn.transaction()?;
         let finished_at = if event.status.is_terminal() {
             Some(event.occurred_at)
@@ -141,7 +148,7 @@ impl TaskHistoryStore {
     }
 
     pub fn recent_jobs(&self, limit: u32) -> rusqlite::Result<Vec<TaskHistoryJob>> {
-        let conn = self.conn.lock().expect("task history store mutex poisoned");
+        let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
             "SELECT
                 job_id, request_id, batch_id, source, current_status, current_message,
@@ -156,7 +163,7 @@ impl TaskHistoryStore {
     }
 
     pub fn events_for_job(&self, job_id: &str) -> rusqlite::Result<Vec<TaskHistoryEvent>> {
-        let conn = self.conn.lock().expect("task history store mutex poisoned");
+        let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, job_id, status, message, occurred_at
             FROM task_history_events
@@ -169,7 +176,7 @@ impl TaskHistoryStore {
     }
 
     pub fn clear(&self) -> rusqlite::Result<()> {
-        let mut conn = self.conn.lock().expect("task history store mutex poisoned");
+        let mut conn = self.lock_conn()?;
         let transaction = conn.transaction()?;
         transaction.execute("DELETE FROM task_history_events", [])?;
         transaction.execute("DELETE FROM task_history_jobs", [])?;
@@ -177,7 +184,7 @@ impl TaskHistoryStore {
     }
 
     fn initialize_schema(&self) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().expect("task history store mutex poisoned");
+        let conn = self.lock_conn()?;
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS task_history_jobs (

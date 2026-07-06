@@ -4,9 +4,10 @@ use crate::{
     document::{detect_format, image_to_pdf, DocumentError, DocumentFormat},
     download::{download_to_temp, DownloadError},
     logs::TaskLogEntry,
-    printing::{paper_name, PaperInfo, PrintError, PrintOptions},
+    printing::{paper_name, PaperInfo, PrintError, PrintOptions, PrintTrackingOutcome},
     protocol::{EffectivePaper, JobStatus, PrintJobInput, SupportedFormat},
     remote_store::{NewRemoteStatusEvent, RemoteReportStatus},
+    task_history::{NewTaskHistoryEvent, TaskHistorySource, TaskHistoryStatus},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -212,7 +213,14 @@ async fn print_downloaded_file(
     let printable_path =
         prepare_printable_pdf(downloaded_path, queued_job.job.format, &options.paper).await?;
 
-    push_log(state, queued_job, JobStatus::Printing, "printing").await;
+    push_log_with_metadata(
+        state,
+        queued_job,
+        JobStatus::Printing,
+        "printing",
+        Some(options),
+    )
+    .await;
     let print_result = {
         let _print_guard = state.print_lock.lock().await;
         state.printing.print_pdf(&printable_path, options)
@@ -223,12 +231,28 @@ async fn print_downloaded_file(
         cleanup_file(&printable_path).await;
     }
 
-    print_result?;
-    push_log(
+    let submission = print_result?;
+    push_log_with_metadata(
         state,
         queued_job,
         JobStatus::Submitted,
         "submitted to system print queue",
+        Some(options),
+    )
+    .await;
+
+    let (tracking_status, tracking_message) =
+        match state.printing.track_submission(&submission, options) {
+            PrintTrackingOutcome::Completed { message } => (JobStatus::Completed, message),
+            PrintTrackingOutcome::Failed { message } => (JobStatus::Failed, message),
+            PrintTrackingOutcome::Unknown { message } => (JobStatus::Unknown, message),
+        };
+    push_log_with_metadata_without_remote(
+        state,
+        queued_job,
+        tracking_status,
+        &tracking_message,
+        Some(options),
     )
     .await;
 
@@ -380,6 +404,37 @@ async fn cleanup_file(path: &Path) {
 
 /// 保存任务日志记录，并广播给已订阅的 WebSocket 客户端。
 async fn push_log(state: &AppState, queued_job: &QueuedJob, status: JobStatus, message: &str) {
+    push_log_with_metadata(state, queued_job, status, message, None).await;
+}
+
+async fn push_log_with_metadata(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    status: JobStatus,
+    message: &str,
+    options: Option<&PrintOptions>,
+) {
+    push_log_with_metadata_and_remote(state, queued_job, status, message, options, true).await;
+}
+
+async fn push_log_with_metadata_without_remote(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    status: JobStatus,
+    message: &str,
+    options: Option<&PrintOptions>,
+) {
+    push_log_with_metadata_and_remote(state, queued_job, status, message, options, false).await;
+}
+
+async fn push_log_with_metadata_and_remote(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    status: JobStatus,
+    message: &str,
+    options: Option<&PrintOptions>,
+    enqueue_remote: bool,
+) {
     let entry = TaskLogEntry {
         timestamp: OffsetDateTime::now_utc()
             .format(&Rfc3339)
@@ -391,9 +446,56 @@ async fn push_log(state: &AppState, queued_job: &QueuedJob, status: JobStatus, m
         status,
         message: message.to_string(),
     };
+    let occurred_at = entry.timestamp.clone();
     state.logs.lock().await.push(entry.clone());
     state.broadcast_status(entry);
-    enqueue_remote_status_event(state, queued_job, status, message).await;
+
+    if let Some(task_history) = &state.task_history {
+        let result = task_history.record_event(&NewTaskHistoryEvent {
+            job_id: &queued_job.job.job_id,
+            request_id: Some(&queued_job.request_id),
+            batch_id: queued_job.batch_id.as_deref(),
+            source: task_history_source(queued_job),
+            status: task_history_status(status),
+            message: if message.is_empty() {
+                None
+            } else {
+                Some(message)
+            },
+            printer_name: options.map(|value| value.printer_name.as_str()),
+            paper_name: options.map(|value| value.paper.name.as_str()),
+            copies: Some(queued_job.job.copies),
+            occurred_at: &occurred_at,
+        });
+        if let Err(error) = result {
+            tauri_plugin_log::log::error!("failed to record task history event: {error}");
+        }
+    }
+
+    if enqueue_remote {
+        enqueue_remote_status_event(state, queued_job, status, message).await;
+    }
+}
+
+fn task_history_status(status: JobStatus) -> TaskHistoryStatus {
+    match status {
+        JobStatus::Queued => TaskHistoryStatus::Queued,
+        JobStatus::Downloading => TaskHistoryStatus::Downloading,
+        JobStatus::Printing => TaskHistoryStatus::Printing,
+        JobStatus::Submitted => TaskHistoryStatus::Submitted,
+        JobStatus::Completed => TaskHistoryStatus::Completed,
+        JobStatus::Failed => TaskHistoryStatus::Failed,
+        JobStatus::Unknown => TaskHistoryStatus::Unknown,
+        JobStatus::Cancelled => TaskHistoryStatus::Cancelled,
+    }
+}
+
+fn task_history_source(queued_job: &QueuedJob) -> TaskHistorySource {
+    if queued_job.remote {
+        TaskHistorySource::Remote
+    } else {
+        TaskHistorySource::WebSocket
+    }
 }
 
 async fn enqueue_remote_status_event(
@@ -448,10 +550,12 @@ mod worker_tests {
         app_state::AppState,
         config::{AgentConfig, PrintingConfig},
         printing::{
-            PaperInfo, PrintBackend, PrintOptions, PrintResult, PrintSubmission, PrinterInfo,
+            PaperInfo, PrintBackend, PrintOptions, PrintResult, PrintSubmission,
+            PrintTrackingOutcome, PrinterInfo,
         },
         protocol::{EffectivePaper, JobStatus, PrintJobInput, SupportedFormat},
         remote_store::{RemoteReportStatus, RemoteStore},
+        task_history::{TaskHistoryStatus, TaskHistoryStore},
     };
     use image::{ImageBuffer, Rgb};
     use std::{
@@ -667,6 +771,116 @@ mod worker_tests {
     }
 
     #[tokio::test]
+    async fn process_downloaded_job_records_submitted_and_unknown_tracking_history() {
+        let pdf_path = temp_path("worker-history-source.tmp");
+        let _ = fs::remove_file(&pdf_path);
+        let pdf_output_path = pdf_path.with_extension("pdf");
+        let _ = fs::remove_file(&pdf_output_path);
+        fs::write(&pdf_path, b"%PDF-1.7\n%%EOF").unwrap();
+
+        let state = AppState::with_printing(
+            config_with_defaults(Some(default_paper())),
+            Box::new(MockPrintBackend::default()),
+        )
+        .with_task_history_store(TaskHistoryStore::open_in_memory().unwrap());
+        let queued = queued_job(job_with(
+            "print-ok",
+            SupportedFormat::Pdf,
+            "http://127.0.0.1/file.pdf",
+            2,
+            None,
+        ));
+        let config = state.config.read().await.clone();
+        let options = resolve_print_options(&queued, &config).unwrap();
+
+        super::print_downloaded_file(&state, &queued, &options, &pdf_path)
+            .await
+            .unwrap();
+
+        let jobs = state
+            .task_history
+            .as_ref()
+            .unwrap()
+            .recent_jobs(500)
+            .unwrap();
+        assert_eq!(jobs[0].current_status, TaskHistoryStatus::Unknown);
+        assert_eq!(jobs[0].printer_name.as_deref(), Some("Printer A"));
+        assert_eq!(jobs[0].paper_name.as_deref(), Some("80 x 50 mm"));
+        assert_eq!(jobs[0].copies, Some(2));
+        let events = state
+            .task_history
+            .as_ref()
+            .unwrap()
+            .events_for_job("print-ok")
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event.status == TaskHistoryStatus::Submitted));
+        assert!(events
+            .iter()
+            .any(|event| event.status == TaskHistoryStatus::Unknown));
+
+        let _ = fs::remove_file(&pdf_path);
+        let _ = fs::remove_file(&pdf_output_path);
+    }
+
+    #[tokio::test]
+    async fn remote_downloaded_job_does_not_report_tracking_failure_after_submitted() {
+        let pdf_path = temp_path("worker-remote-success-source.tmp");
+        let _ = fs::remove_file(&pdf_path);
+        let pdf_output_path = pdf_path.with_extension("pdf");
+        let _ = fs::remove_file(&pdf_output_path);
+        fs::write(&pdf_path, b"%PDF-1.7\n%%EOF").unwrap();
+
+        let backend = MockPrintBackend {
+            tracking_outcome: Some(PrintTrackingOutcome::Failed {
+                message: "system queue failed after submission".to_string(),
+            }),
+            ..MockPrintBackend::default()
+        };
+        let state = AppState::with_printing(
+            config_with_defaults(Some(default_paper())),
+            Box::new(backend),
+        )
+        .with_remote_store(RemoteStore::open_in_memory().unwrap());
+        let mut queued = queued_job(job_with(
+            "remote-print-ok",
+            SupportedFormat::Pdf,
+            "http://127.0.0.1/file.pdf",
+            1,
+            None,
+        ));
+        queued.remote = true;
+        let config = state.config.read().await.clone();
+        let options = resolve_print_options(&queued, &config).unwrap();
+
+        super::push_log(&state, &queued, JobStatus::Queued, "queued").await;
+        super::print_downloaded_file(&state, &queued, &options, &pdf_path)
+            .await
+            .unwrap();
+
+        let events = state
+            .remote_store
+            .as_ref()
+            .unwrap()
+            .pending_status_events("9999-01-01T00:00:00Z", 10)
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .any(|event| event.status == RemoteReportStatus::Accepted));
+        assert!(events
+            .iter()
+            .any(|event| event.status == RemoteReportStatus::Success));
+        assert!(!events
+            .iter()
+            .any(|event| event.status == RemoteReportStatus::Failed));
+
+        let _ = fs::remove_file(&pdf_path);
+        let _ = fs::remove_file(&pdf_output_path);
+    }
+
+    #[tokio::test]
     async fn process_downloaded_job_converts_image_to_pdf_before_printing() {
         let image_path = temp_path("worker-source.png");
         let _ = fs::remove_file(&image_path);
@@ -734,6 +948,7 @@ mod worker_tests {
     #[derive(Default)]
     struct MockPrintBackend {
         calls: Arc<Mutex<Vec<PrintCall>>>,
+        tracking_outcome: Option<PrintTrackingOutcome>,
     }
 
     struct PrintCall {
@@ -758,6 +973,18 @@ mod worker_tests {
                 options: options.clone(),
             });
             Ok(mock_submission())
+        }
+
+        fn track_submission(
+            &self,
+            _submission: &PrintSubmission,
+            _options: &PrintOptions,
+        ) -> PrintTrackingOutcome {
+            self.tracking_outcome
+                .clone()
+                .unwrap_or_else(|| PrintTrackingOutcome::Unknown {
+                    message: "platform does not provide trackable print status".to_string(),
+                })
         }
     }
 
