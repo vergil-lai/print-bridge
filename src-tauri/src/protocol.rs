@@ -14,6 +14,9 @@ pub enum SupportedFormat {
     Png,
     Jpg,
     Jpeg,
+    Docx,
+    Xlsx,
+    Pptx,
     Raw,
 }
 
@@ -41,6 +44,9 @@ impl FromStr for SupportedFormat {
             "png" => Ok(Self::Png),
             "jpg" => Ok(Self::Jpg),
             "jpeg" => Ok(Self::Jpeg),
+            "docx" => Ok(Self::Docx),
+            "xlsx" => Ok(Self::Xlsx),
+            "pptx" => Ok(Self::Pptx),
             "raw" => Ok(Self::Raw),
             _ => Err(ParseSupportedFormatError),
         }
@@ -127,7 +133,10 @@ impl PrintJobInput {
             | SupportedFormat::Image
             | SupportedFormat::Png
             | SupportedFormat::Jpg
-            | SupportedFormat::Jpeg => self.validate_file_job(),
+            | SupportedFormat::Jpeg
+            | SupportedFormat::Docx
+            | SupportedFormat::Xlsx
+            | SupportedFormat::Pptx => self.validate_file_job(),
         }
     }
 
@@ -293,6 +302,7 @@ pub enum ErrorCode {
     FileTooLarge,
     UnsupportedFormat,
     FormatMismatch,
+    OfficeConvertFailed,
     PrintFailed,
     JobDuplicated,
     BatchDuplicated,
@@ -357,7 +367,30 @@ pub fn is_pdf_data_url(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{JobValidationError, PrintJobInput, SupportedFormat};
+    use super::{ErrorCode, JobValidationError, PrintJobInput, SupportedFormat};
+    use std::str::FromStr;
+
+    #[test]
+    fn parses_office_supported_formats() {
+        assert_eq!(
+            SupportedFormat::from_str("docx").unwrap(),
+            SupportedFormat::Docx
+        );
+        assert_eq!(
+            SupportedFormat::from_str("xlsx").unwrap(),
+            SupportedFormat::Xlsx
+        );
+        assert_eq!(
+            SupportedFormat::from_str("pptx").unwrap(),
+            SupportedFormat::Pptx
+        );
+    }
+
+    #[test]
+    fn serializes_office_convert_failed_error_code() {
+        let value = serde_json::to_value(ErrorCode::OfficeConvertFailed).unwrap();
+        assert_eq!(value, serde_json::json!("OFFICE_CONVERT_FAILED"));
+    }
 
     #[test]
     fn raw_job_accepts_inline_base64_and_optional_printer_name() {

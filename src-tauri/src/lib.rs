@@ -4,6 +4,7 @@ pub mod config;
 pub mod document;
 pub mod download;
 pub mod logs;
+pub mod office;
 pub mod printing;
 pub mod protocol;
 pub mod queue;

@@ -4,6 +4,10 @@ use crate::{
     document::{detect_format, image_to_pdf, DocumentError, DocumentFormat},
     download::{download_to_temp, DownloadError},
     logs::TaskLogEntry,
+    office::{
+        detect_office_format, office_format_from_supported, office_to_pdf, OfficeConvertError,
+        OfficeFormat,
+    },
     printing::{
         paper_name, PaperInfo, PrintError, PrintOptions, PrintTrackingOutcome, RawPrintOptions,
     },
@@ -171,6 +175,8 @@ enum ProcessJobError {
     Download(#[from] DownloadError),
     #[error("document normalization failed: {0}")]
     Document(#[from] DocumentError),
+    #[error("{0}")]
+    OfficeConvert(#[from] OfficeConvertError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("print failed: {0}")]
@@ -406,6 +412,20 @@ async fn prepare_printable_pdf(
     expected_format: SupportedFormat,
     paper: &PaperInfo,
 ) -> Result<PathBuf, ProcessJobError> {
+    if let Some(expected_office_format) = office_format_from_supported(expected_format) {
+        let actual_office_format = detect_office_format(downloaded_path)?;
+        if actual_office_format != Some(expected_office_format) {
+            return Err(ProcessJobError::FormatMismatch {
+                expected: office_format_name(expected_office_format),
+                actual: actual_office_format.map_or("unsupported", office_format_name),
+            });
+        }
+
+        let output_path = downloaded_path.with_extension("pdf");
+        office_to_pdf(downloaded_path, expected_office_format, &output_path)?;
+        return Ok(output_path);
+    }
+
     let actual_format =
         detect_format(downloaded_path)?.ok_or(ProcessJobError::UnsupportedFormat)?;
     if !format_matches(expected_format, actual_format) {
@@ -472,6 +492,9 @@ fn supported_format_name(format: SupportedFormat) -> &'static str {
         SupportedFormat::Png => "png",
         SupportedFormat::Jpg => "jpg",
         SupportedFormat::Jpeg => "jpeg",
+        SupportedFormat::Docx => "docx",
+        SupportedFormat::Xlsx => "xlsx",
+        SupportedFormat::Pptx => "pptx",
         SupportedFormat::Raw => "raw",
     }
 }
@@ -482,6 +505,14 @@ fn document_format_name(format: DocumentFormat) -> &'static str {
         DocumentFormat::Pdf => "pdf",
         DocumentFormat::Png => "png",
         DocumentFormat::Jpeg => "jpeg",
+    }
+}
+
+fn office_format_name(format: OfficeFormat) -> &'static str {
+    match format {
+        OfficeFormat::Docx => "docx",
+        OfficeFormat::Xlsx => "xlsx",
+        OfficeFormat::Pptx => "pptx",
     }
 }
 
@@ -749,9 +780,11 @@ mod worker_tests {
     use image::{ImageBuffer, Rgb};
     use std::{
         fs,
+        io::Write,
         path::{Path, PathBuf},
         sync::{Arc, Mutex},
     };
+    use zip::{write::SimpleFileOptions, ZipWriter};
 
     #[test]
     fn resolve_print_options_prefers_job_paper_over_default_paper() {
@@ -1170,6 +1203,71 @@ mod worker_tests {
         let _ = fs::remove_file(&image_path);
     }
 
+    #[tokio::test]
+    async fn process_downloaded_job_rejects_office_format_mismatch() {
+        let xlsx_path = temp_path("worker-office-mismatch.xlsx");
+        let _ = fs::remove_file(&xlsx_path);
+        write_zip(&xlsx_path, &["xl/workbook.xml"]);
+
+        let backend = MockPrintBackend::default();
+        let calls = backend.calls.clone();
+        let state = AppState::with_printing(
+            config_with_defaults(Some(default_paper())),
+            Box::new(backend),
+        );
+        let queued = queued_job(job_with(
+            "office-format-mismatch",
+            SupportedFormat::Docx,
+            "http://127.0.0.1/file.xlsx",
+            1,
+            None,
+        ));
+        let config = state.config.read().await.clone();
+        let options = resolve_print_options(&queued, &config).unwrap();
+
+        let error = super::print_downloaded_file(&state, &queued, &options, &xlsx_path)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("format mismatch"));
+        assert!(calls.lock().unwrap().is_empty());
+        let _ = fs::remove_file(&xlsx_path);
+    }
+
+    #[tokio::test]
+    async fn process_downloaded_job_reports_office_conversion_failure() {
+        let docx_path = temp_path("worker-office-convert-fails.docx");
+        let _ = fs::remove_file(&docx_path);
+        let pdf_output_path = docx_path.with_extension("pdf");
+        let _ = fs::remove_file(&pdf_output_path);
+        write_zip(&docx_path, &["word/document.xml"]);
+
+        let backend = MockPrintBackend::default();
+        let calls = backend.calls.clone();
+        let state = AppState::with_printing(
+            config_with_defaults(Some(default_paper())),
+            Box::new(backend),
+        );
+        let queued = queued_job(job_with(
+            "office-convert-fails",
+            SupportedFormat::Docx,
+            "http://127.0.0.1/file.docx",
+            1,
+            None,
+        ));
+        let config = state.config.read().await.clone();
+        let options = resolve_print_options(&queued, &config).unwrap();
+
+        let error = super::print_downloaded_file(&state, &queued, &options, &docx_path)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("office conversion failed"));
+        assert!(calls.lock().unwrap().is_empty());
+        let _ = fs::remove_file(&docx_path);
+        let _ = fs::remove_file(&pdf_output_path);
+    }
+
     #[derive(Default)]
     struct MockPrintBackend {
         calls: Arc<Mutex<Vec<PrintCall>>>,
@@ -1302,5 +1400,16 @@ mod worker_tests {
             "print-bridge-queue-worker-test-{}-{file_name}",
             std::process::id()
         ))
+    }
+
+    fn write_zip(path: &Path, entries: &[&str]) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        for entry in entries {
+            zip.start_file(entry, options).unwrap();
+            zip.write_all(b"<xml/>").unwrap();
+        }
+        zip.finish().unwrap();
     }
 }

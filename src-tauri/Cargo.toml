@@ -37,6 +37,8 @@ uuid = { version = "1.23.4", features = ["v4", "serde"] }
 mime_guess = "2.0.5"
 image = "0.25.10"
 printpdf = { version = "0.9.1", features = ["images"] }
+office2pdf = "0.6.0"
+zip = "4.6.1"
 tauri-plugin-process = "2"
 tauri-plugin-log = "2"
 
