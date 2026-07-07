@@ -8,8 +8,10 @@ fn job(job_id: &str) -> PrintJobInput {
     PrintJobInput {
         job_id: job_id.to_string(),
         format: SupportedFormat::Pdf,
-        file_url: format!("https://example.com/{job_id}.pdf"),
-        copies: 1,
+        printer_name: None,
+        file_url: Some(format!("https://example.com/{job_id}.pdf")),
+        data_base64: None,
+        copies: Some(1),
         paper: None,
     }
 }

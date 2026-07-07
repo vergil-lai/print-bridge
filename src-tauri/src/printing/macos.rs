@@ -1,9 +1,9 @@
 use super::{
     common_label_papers, cups_media_option, paper_name, resolve_paper_for_print,
     submitted_at_rfc3339, PaperInfo, PrintBackend, PrintError, PrintOptions, PrintResult,
-    PrintSubmission, PrintTrackingOutcome, PrinterInfo,
+    PrintSubmission, PrintTrackingOutcome, PrinterInfo, RawPrintOptions,
 };
-use std::{path::Path, process::Command};
+use std::{io::Write, path::Path, process::Command};
 
 /// 基于 CUPS 命令行工具的 macOS 打印后端。
 pub struct MacosPrintBackend;
@@ -76,40 +76,99 @@ impl PrintBackend for MacosPrintBackend {
         }
     }
 
+    /// 使用 CUPS raw 模式把原始打印指令提交给打印机。
+    fn print_raw(&self, data: &[u8], options: &RawPrintOptions) -> PrintResult<PrintSubmission> {
+        ensure_printer_exists(self, &options.printer_name)?;
+        let path = temp_raw_path();
+        write_raw_temp_file(&path, data)?;
+
+        let output = Command::new("lp")
+            .arg("-d")
+            .arg(&options.printer_name)
+            .arg("-o")
+            .arg("raw")
+            .arg(&path)
+            .output()
+            .map_err(|error| command_error("lp", error.to_string()));
+        let _ = std::fs::remove_file(&path);
+        let output = output?;
+
+        if output.status.success() {
+            let system_job_id = parse_lp_job_id(&String::from_utf8_lossy(&output.stdout));
+            let tracking_supported = system_job_id.is_some();
+            Ok(PrintSubmission {
+                submitted_at: submitted_at_rfc3339(),
+                backend: "macos-cups-raw".to_string(),
+                system_job_id,
+                tracking_supported,
+            })
+        } else {
+            Err(command_error(
+                "lp",
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ))
+        }
+    }
+
     fn track_submission(
         &self,
         submission: &PrintSubmission,
         _options: &PrintOptions,
     ) -> PrintTrackingOutcome {
-        let Some(job_id) = submission.system_job_id.as_deref() else {
-            return PrintTrackingOutcome::Unknown {
-                message: "CUPS did not expose a print job id".to_string(),
-            };
-        };
+        track_cups_submission(submission)
+    }
 
-        match Command::new("lpstat")
-            .args(["-W", "completed", "-o"])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                if completed_jobs_contains_job(&String::from_utf8_lossy(&output.stdout), job_id) {
-                    PrintTrackingOutcome::Completed {
-                        message: "CUPS reports the print job as completed".to_string(),
-                    }
-                } else {
-                    PrintTrackingOutcome::Unknown {
-                        message: "CUPS job status was no longer available".to_string(),
-                    }
+    fn track_raw_submission(
+        &self,
+        submission: &PrintSubmission,
+        _options: &RawPrintOptions,
+    ) -> PrintTrackingOutcome {
+        track_cups_submission(submission)
+    }
+}
+
+fn track_cups_submission(submission: &PrintSubmission) -> PrintTrackingOutcome {
+    let Some(job_id) = submission.system_job_id.as_deref() else {
+        return PrintTrackingOutcome::Unknown {
+            message: "CUPS did not expose a print job id".to_string(),
+        };
+    };
+
+    match Command::new("lpstat")
+        .args(["-W", "completed", "-o"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            if completed_jobs_contains_job(&String::from_utf8_lossy(&output.stdout), job_id) {
+                PrintTrackingOutcome::Completed {
+                    message: "CUPS reports the print job as completed".to_string(),
+                }
+            } else {
+                PrintTrackingOutcome::Unknown {
+                    message: "CUPS job status was no longer available".to_string(),
                 }
             }
-            Ok(output) => PrintTrackingOutcome::Unknown {
-                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            },
-            Err(error) => PrintTrackingOutcome::Unknown {
-                message: error.to_string(),
-            },
         }
+        Ok(output) => PrintTrackingOutcome::Unknown {
+            message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        },
+        Err(error) => PrintTrackingOutcome::Unknown {
+            message: error.to_string(),
+        },
     }
+}
+
+fn temp_raw_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("print-bridge-raw-{}.bin", uuid::Uuid::new_v4()))
+}
+
+fn write_raw_temp_file(path: &Path, data: &[u8]) -> PrintResult<()> {
+    let mut file = std::fs::File::create(path)
+        .map_err(|error| command_error("raw-temp-file", error.to_string()))?;
+    file.write_all(data)
+        .map_err(|error| command_error("raw-temp-file", error.to_string()))?;
+    file.flush()
+        .map_err(|error| command_error("raw-temp-file", error.to_string()))
 }
 
 fn parse_lp_job_id(output: &str) -> Option<String> {

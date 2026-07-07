@@ -1,4 +1,5 @@
 use crate::printing::{PaperInfo, PrinterInfo};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use thiserror::Error;
@@ -13,6 +14,7 @@ pub enum SupportedFormat {
     Png,
     Jpg,
     Jpeg,
+    Raw,
 }
 
 /// 字符串无法解析为支持格式时返回的错误。
@@ -39,6 +41,7 @@ impl FromStr for SupportedFormat {
             "png" => Ok(Self::Png),
             "jpg" => Ok(Self::Jpg),
             "jpeg" => Ok(Self::Jpeg),
+            "raw" => Ok(Self::Raw),
             _ => Err(ParseSupportedFormatError),
         }
     }
@@ -57,6 +60,27 @@ pub enum ProtocolError {
     UnsupportedFileUrlScheme,
     #[error("paper dimensions must be positive")]
     InvalidPaperDimensions,
+}
+
+/// 单个打印任务字段组合不符合协议时返回的错误。
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum JobValidationError {
+    #[error("raw job requires data_base64")]
+    MissingRawData,
+    #[error("raw job does not accept file_url")]
+    RawFileUrlNotAllowed,
+    #[error("raw job does not accept paper")]
+    RawPaperNotAllowed,
+    #[error("raw job does not accept copies")]
+    RawCopiesNotAllowed,
+    #[error("file job requires file_url")]
+    MissingFileUrl,
+    #[error("file job does not accept data_base64")]
+    FileRawDataNotAllowed,
+    #[error("invalid raw data_base64")]
+    InvalidRawData,
+    #[error("file too large")]
+    FileTooLarge,
 }
 
 /// 任务和配置合并后的纸张尺寸。
@@ -82,16 +106,73 @@ impl EffectivePaper {
 pub struct PrintJobInput {
     pub job_id: String,
     pub format: SupportedFormat,
-    pub file_url: String,
-    #[serde(default = "default_copies")]
-    pub copies: u16,
+    #[serde(default)]
+    pub printer_name: Option<String>,
+    #[serde(default)]
+    pub file_url: Option<String>,
+    #[serde(default)]
+    pub data_base64: Option<String>,
+    #[serde(default)]
+    pub copies: Option<u16>,
     #[serde(default)]
     pub paper: Option<EffectivePaper>,
 }
 
-/// 打印任务未提供份数字段时使用的默认值。
-fn default_copies() -> u16 {
-    1
+impl PrintJobInput {
+    /// 校验任务字段组合是否可被接收进入队列。
+    pub fn validate_for_acceptance(&self, max_file_size_mb: u64) -> Result<(), JobValidationError> {
+        match self.format {
+            SupportedFormat::Raw => self.validate_raw(max_file_size_mb),
+            SupportedFormat::Pdf
+            | SupportedFormat::Image
+            | SupportedFormat::Png
+            | SupportedFormat::Jpg
+            | SupportedFormat::Jpeg => self.validate_file_job(),
+        }
+    }
+
+    fn validate_raw(&self, max_file_size_mb: u64) -> Result<(), JobValidationError> {
+        if self.file_url.is_some() {
+            return Err(JobValidationError::RawFileUrlNotAllowed);
+        }
+        if self.paper.is_some() {
+            return Err(JobValidationError::RawPaperNotAllowed);
+        }
+        if self.copies.is_some() {
+            return Err(JobValidationError::RawCopiesNotAllowed);
+        }
+
+        let data_base64 = self
+            .data_base64
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or(JobValidationError::MissingRawData)?;
+        let bytes = STANDARD
+            .decode(data_base64)
+            .map_err(|_| JobValidationError::InvalidRawData)?;
+        let max_bytes = max_file_size_mb.saturating_mul(1024 * 1024);
+        if bytes.len() as u64 > max_bytes {
+            return Err(JobValidationError::FileTooLarge);
+        }
+
+        Ok(())
+    }
+
+    fn validate_file_job(&self) -> Result<(), JobValidationError> {
+        if self
+            .file_url
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            return Err(JobValidationError::MissingFileUrl);
+        }
+        if self.data_base64.is_some() {
+            return Err(JobValidationError::FileRawDataNotAllowed);
+        }
+
+        Ok(())
+    }
 }
 
 /// WebSocket 协议接受的浏览器客户端消息。
@@ -265,4 +346,75 @@ pub fn is_pdf_data_url(value: &str) -> bool {
 
     media_type.eq_ignore_ascii_case("application/pdf")
         && parts.any(|part| part.eq_ignore_ascii_case("base64"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{JobValidationError, PrintJobInput, SupportedFormat};
+
+    #[test]
+    fn raw_job_accepts_inline_base64_and_optional_printer_name() {
+        let job: PrintJobInput = serde_json::from_str(
+            r#"{
+                "job_id":"RAW-001",
+                "format":"raw",
+                "printer_name":"Zebra ZD421",
+                "data_base64":"XlhB"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(job.format, SupportedFormat::Raw);
+        assert_eq!(job.printer_name.as_deref(), Some("Zebra ZD421"));
+        assert_eq!(job.data_base64.as_deref(), Some("XlhB"));
+        assert!(job.file_url.is_none());
+        assert!(job.paper.is_none());
+        assert!(job.copies.is_none());
+        assert_eq!(job.validate_for_acceptance(20), Ok(()));
+    }
+
+    #[test]
+    fn file_job_accepts_printer_name_and_existing_fields() {
+        let job: PrintJobInput = serde_json::from_str(
+            r#"{
+                "job_id":"PDF-001",
+                "format":"pdf",
+                "printer_name":"Office Printer",
+                "file_url":"https://example.com/a.pdf",
+                "copies":2,
+                "paper":{"width_mm":60,"height_mm":40}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(job.format, SupportedFormat::Pdf);
+        assert_eq!(job.printer_name.as_deref(), Some("Office Printer"));
+        assert_eq!(job.copies, Some(2));
+        assert_eq!(job.validate_for_acceptance(20), Ok(()));
+    }
+
+    #[test]
+    fn raw_job_rejects_file_fields() {
+        let mut job = PrintJobInput {
+            job_id: "RAW-INVALID".to_string(),
+            format: SupportedFormat::Raw,
+            printer_name: None,
+            file_url: Some("https://example.com/raw.bin".to_string()),
+            data_base64: Some("XlhB".to_string()),
+            copies: None,
+            paper: None,
+        };
+
+        assert_eq!(
+            job.validate_for_acceptance(20),
+            Err(JobValidationError::RawFileUrlNotAllowed)
+        );
+
+        job.file_url = None;
+        job.copies = Some(1);
+        assert_eq!(
+            job.validate_for_acceptance(20),
+            Err(JobValidationError::RawCopiesNotAllowed)
+        );
+    }
 }

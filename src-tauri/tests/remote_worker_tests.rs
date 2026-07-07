@@ -66,16 +66,18 @@ async fn report_pending_once_marks_2xx_events_delivered() {
 }
 
 fn state(endpoint_url: String) -> AppState {
-    let mut config = AgentConfig::default();
-    config.remote = RemoteConfig {
-        enabled: true,
-        endpoint_url: Some(endpoint_url),
-        bearer_token: None,
-        device_id: None,
-        device_name: None,
-        poll_interval_seconds: 10,
-        max_report_retries: 10,
-        history_retention_days: 3,
+    let config = AgentConfig {
+        remote: RemoteConfig {
+            enabled: true,
+            endpoint_url: Some(endpoint_url),
+            bearer_token: None,
+            device_id: None,
+            device_name: None,
+            poll_interval_seconds: 10,
+            max_report_retries: 10,
+            history_retention_days: 3,
+        },
+        ..AgentConfig::default()
     };
 
     AppState::with_printing(config, default_backend())

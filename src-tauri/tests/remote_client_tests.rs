@@ -155,11 +155,13 @@ fn read_request(stream: &mut TcpStream) -> String {
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(0);
             let body_read = bytes.len().saturating_sub(header_end + 4);
-            while body_read < content_length {
-                let count = stream.read(&mut buffer).unwrap();
-                bytes.extend_from_slice(&buffer[..count]);
-                if bytes.len().saturating_sub(header_end + 4) >= content_length {
-                    break;
+            if body_read < content_length {
+                loop {
+                    let count = stream.read(&mut buffer).unwrap();
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if bytes.len().saturating_sub(header_end + 4) >= content_length {
+                        break;
+                    }
                 }
             }
             break;

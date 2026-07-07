@@ -5,7 +5,7 @@ use crate::{
     printing::{paper_name, PaperInfo, PrintError, PrintOptions},
     protocol::EffectivePaper,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// 测试打印校准页时可能返回的错误。
@@ -51,7 +51,7 @@ async fn print_calibration_page_inner(
     state: &AppState,
     printer_name: String,
     paper: EffectivePaper,
-    path: &PathBuf,
+    path: &Path,
 ) -> Result<(), TestPrintError> {
     calibration_page_to_pdf(&paper, path)?;
 

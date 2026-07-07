@@ -117,9 +117,12 @@ fn print_job_input_requires_job_id_but_paper_is_optional() {
     let job: PrintJobInput = serde_json::from_str(json).unwrap();
 
     assert_eq!(job.job_id, "job-1");
-    assert_eq!(job.file_url, "https://example.com/document.pdf");
+    assert_eq!(
+        job.file_url.as_deref(),
+        Some("https://example.com/document.pdf")
+    );
     assert_eq!(job.format, SupportedFormat::Pdf);
-    assert_eq!(job.copies, 1);
+    assert_eq!(job.copies, Some(1));
     assert!(job.paper.is_none());
 }
 
@@ -199,7 +202,7 @@ fn client_message_print_parses_with_job_id() {
             assert_eq!(request_id, "request-1");
             assert_eq!(job.job_id, "job-1");
             assert_eq!(job.format, SupportedFormat::Pdf);
-            assert_eq!(job.copies, 2);
+            assert_eq!(job.copies, Some(2));
             assert!(job.paper.is_none());
         }
         other => panic!("expected print message, got {other:?}"),

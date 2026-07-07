@@ -4,8 +4,8 @@ use crate::{
     logs::TaskLogEntry,
     printing::{PaperInfo, PrintError, PrinterInfo},
     protocol::{
-        is_allowed_origin, ClientMessage, ErrorCode, JobStatus, PrintQueueJobInfo, PrinterDetails,
-        ServerMessage,
+        is_allowed_origin, ClientMessage, ErrorCode, JobStatus, JobValidationError,
+        PrintQueueJobInfo, PrinterDetails, ServerMessage,
     },
     queue::QueueError,
     test_print::{print_calibration_page, TestPrintError},
@@ -395,6 +395,14 @@ async fn handle_client_text(state: &AppState, text: &str) -> ClientTextOutcome {
             ClientTextOutcome::response(ServerMessage::PrintQueue { request_id, jobs })
         }
         ClientMessage::Print { request_id, job } => {
+            let max_file_size_mb = state.config.read().await.limits.max_file_size_mb;
+            if let Err(error) = job.validate_for_acceptance(max_file_size_mb) {
+                return ClientTextOutcome::response(job_validation_error_response(
+                    Some(request_id),
+                    error,
+                ));
+            }
+
             let job_id = job.job_id.clone();
             let result = state.queue.lock().await.accept_job(request_id.clone(), job);
             match result {
@@ -427,6 +435,15 @@ async fn handle_client_text(state: &AppState, text: &str) -> ClientTextOutcome {
                     error_code: ErrorCode::BatchTooLarge,
                     message: "batch contains too many jobs".to_string(),
                 });
+            }
+            let max_file_size_mb = state.config.read().await.limits.max_file_size_mb;
+            for job in &jobs {
+                if let Err(error) = job.validate_for_acceptance(max_file_size_mb) {
+                    return ClientTextOutcome::response(job_validation_error_response(
+                        Some(request_id),
+                        error,
+                    ));
+                }
             }
 
             // 保存所有已接受的任务 ID，便于后续 worker 状态广播
@@ -486,6 +503,29 @@ fn queue_error_response(request_id: Option<String>, error: QueueError) -> Server
     let error_code = match error {
         QueueError::DuplicateJobId => ErrorCode::JobDuplicated,
         QueueError::DuplicateBatchId => ErrorCode::BatchDuplicated,
+    };
+
+    ServerMessage::Error {
+        request_id,
+        error_code,
+        message: error.to_string(),
+    }
+}
+
+/// 把任务字段校验失败映射为 WebSocket 协议错误消息。
+fn job_validation_error_response(
+    request_id: Option<String>,
+    error: JobValidationError,
+) -> ServerMessage {
+    let error_code = match error {
+        JobValidationError::FileTooLarge => ErrorCode::FileTooLarge,
+        JobValidationError::MissingRawData
+        | JobValidationError::RawFileUrlNotAllowed
+        | JobValidationError::RawPaperNotAllowed
+        | JobValidationError::RawCopiesNotAllowed
+        | JobValidationError::MissingFileUrl
+        | JobValidationError::FileRawDataNotAllowed
+        | JobValidationError::InvalidRawData => ErrorCode::InvalidMessage,
     };
 
     ServerMessage::Error {
@@ -595,6 +635,7 @@ mod tests {
         logs::TaskLogEntry,
         printing::{
             PaperInfo, PrintBackend, PrintOptions, PrintResult, PrintSubmission, PrinterInfo,
+            RawPrintOptions,
         },
         protocol::{ErrorCode, JobStatus, ServerMessage},
         server::{configured_addr, health, is_ws_origin_allowed},
@@ -970,8 +1011,10 @@ mod tests {
                 crate::protocol::PrintJobInput {
                     job_id: "JOB-QUEUE-ITEM".to_string(),
                     format: crate::protocol::SupportedFormat::Pdf,
-                    file_url: "https://example.com/label.pdf".to_string(),
-                    copies: 1,
+                    printer_name: None,
+                    file_url: Some("https://example.com/label.pdf".to_string()),
+                    data_base64: None,
+                    copies: Some(1),
                     paper: None,
                 },
             )
@@ -1015,6 +1058,14 @@ mod tests {
         fn print_pdf(&self, _path: &Path, _options: &PrintOptions) -> PrintResult<PrintSubmission> {
             Ok(mock_submission())
         }
+
+        fn print_raw(
+            &self,
+            _data: &[u8],
+            _options: &RawPrintOptions,
+        ) -> PrintResult<PrintSubmission> {
+            Ok(mock_submission())
+        }
     }
 
     struct MockPrintBackend {
@@ -1042,6 +1093,14 @@ mod tests {
                 path_bytes: fs::read(path).unwrap(),
                 options: options.clone(),
             });
+            Ok(mock_submission())
+        }
+
+        fn print_raw(
+            &self,
+            _data: &[u8],
+            _options: &RawPrintOptions,
+        ) -> PrintResult<PrintSubmission> {
             Ok(mock_submission())
         }
     }

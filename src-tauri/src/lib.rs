@@ -42,10 +42,10 @@ pub fn run() {
             let printing = print_backend(app)?;
             let remote_store =
                 remote_store::RemoteStore::open(&app_config_dir.join("remote.sqlite3"))
-                    .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+                    .map_err(io::Error::other)?;
             let task_history =
                 task_history::TaskHistoryStore::open(&app_config_dir.join("task_history.sqlite3"))
-                    .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+                    .map_err(io::Error::other)?;
             let state = AppState::with_config_path_and_printing(config, config_path, printing)
                 .with_remote_store(remote_store)
                 .with_task_history_store(task_history);

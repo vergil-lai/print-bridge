@@ -34,6 +34,8 @@ pub enum RemoteWorkerError {
     Queue(#[from] QueueError),
     #[error("remote store is not initialized")]
     MissingStore,
+    #[error("invalid remote task: {0}")]
+    InvalidTask(String),
 }
 
 pub async fn run_worker(state: AppState) {
@@ -82,6 +84,7 @@ pub async fn poll_once(
     for task in tasks {
         match task {
             RemoteTask::Print { request_id, job } => {
+                validate_remote_job(state, &job).await?;
                 if enqueue_remote_job(state, store, &now, request_id, None, job).await? {
                     outcome.enqueued += 1;
                 } else {
@@ -95,6 +98,7 @@ pub async fn poll_once(
             } => {
                 let mut new_jobs = Vec::new();
                 for job in jobs {
+                    validate_remote_job(state, &job).await?;
                     if record_remote_job(store, &now, &request_id, Some(&batch_id), &job)? {
                         new_jobs.push(job);
                     } else {
@@ -115,6 +119,15 @@ pub async fn poll_once(
     }
 
     Ok(outcome)
+}
+
+async fn validate_remote_job(
+    state: &AppState,
+    job: &PrintJobInput,
+) -> Result<(), RemoteWorkerError> {
+    let max_file_size_mb = state.config.read().await.limits.max_file_size_mb;
+    job.validate_for_acceptance(max_file_size_mb)
+        .map_err(|error| RemoteWorkerError::InvalidTask(error.to_string()))
 }
 
 pub async fn report_pending_once(

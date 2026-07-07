@@ -4,11 +4,14 @@ use crate::{
     document::{detect_format, image_to_pdf, DocumentError, DocumentFormat},
     download::{download_to_temp, DownloadError},
     logs::TaskLogEntry,
-    printing::{paper_name, PaperInfo, PrintError, PrintOptions, PrintTrackingOutcome},
+    printing::{
+        paper_name, PaperInfo, PrintError, PrintOptions, PrintTrackingOutcome, RawPrintOptions,
+    },
     protocol::{EffectivePaper, JobStatus, PrintJobInput, SupportedFormat},
     remote_store::{NewRemoteStatusEvent, RemoteReportStatus},
     task_history::{NewTaskHistoryEvent, TaskHistorySource, TaskHistoryStatus},
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashSet, VecDeque},
@@ -155,6 +158,10 @@ enum ProcessJobError {
     CopiesOutOfRange,
     #[error("unsupported document format")]
     UnsupportedFormat,
+    #[error("{0}")]
+    InvalidMessage(String),
+    #[error("file too large")]
+    FileTooLarge,
     #[error("format mismatch: expected {expected}, got {actual}")]
     FormatMismatch {
         expected: &'static str,
@@ -199,13 +206,83 @@ async fn process_job_inner(
     queued_job: &QueuedJob,
 ) -> Result<(), ProcessJobError> {
     let config = state.config.read().await.clone();
-    let options = resolve_print_options(queued_job, &config)?;
+    if queued_job.job.format == SupportedFormat::Raw {
+        let options = resolve_raw_print_options(queued_job, &config)?;
+        return print_raw_job(state, queued_job, &options, &config).await;
+    }
 
     push_log(state, queued_job, JobStatus::Downloading, "downloading").await;
-    let downloaded_path = download_to_temp(&queued_job.job.file_url, &config.limits).await?;
+    let file_url =
+        queued_job.job.file_url.as_deref().ok_or_else(|| {
+            ProcessJobError::InvalidMessage("file job requires file_url".to_string())
+        })?;
+    let options = resolve_print_options(queued_job, &config)?;
+    let downloaded_path = download_to_temp(file_url, &config.limits).await?;
     let result = print_downloaded_file(state, queued_job, &options, &downloaded_path).await;
     cleanup_file(&downloaded_path).await;
     result
+}
+
+/// 解码并提交 raw 打印指令，跳过下载和 PDF 规范化。
+async fn print_raw_job(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    options: &RawPrintOptions,
+    config: &AgentConfig,
+) -> Result<(), ProcessJobError> {
+    let data_base64 = queued_job.job.data_base64.as_deref().ok_or_else(|| {
+        ProcessJobError::InvalidMessage("raw job requires data_base64".to_string())
+    })?;
+    let data = STANDARD
+        .decode(data_base64)
+        .map_err(|_| ProcessJobError::InvalidMessage("invalid raw data_base64".to_string()))?;
+    let max_bytes = config.limits.max_file_size_mb.saturating_mul(1024 * 1024);
+    if data.len() as u64 > max_bytes {
+        return Err(ProcessJobError::FileTooLarge);
+    }
+
+    push_log_with_raw_metadata(
+        state,
+        queued_job,
+        JobStatus::Printing,
+        "printing raw",
+        options,
+    )
+    .await;
+    let print_result = {
+        let _print_guard = state.print_lock.lock().await;
+        state.printing.print_raw(&data, options)
+    };
+    let submission = print_result?;
+    push_log_with_raw_metadata(
+        state,
+        queued_job,
+        JobStatus::Submitted,
+        "submitted to system print queue",
+        options,
+    )
+    .await;
+
+    if !submission.tracking_supported {
+        return Ok(());
+    }
+
+    let (tracking_status, tracking_message) =
+        match state.printing.track_raw_submission(&submission, options) {
+            PrintTrackingOutcome::Completed { message } => (JobStatus::Completed, message),
+            PrintTrackingOutcome::Failed { message } => (JobStatus::Failed, message),
+            PrintTrackingOutcome::Unknown { message } => (JobStatus::Unknown, message),
+        };
+    push_log_with_raw_metadata_without_remote(
+        state,
+        queued_job,
+        tracking_status,
+        &tracking_message,
+        options,
+    )
+    .await;
+
+    Ok(())
 }
 
 /// 必要时转换下载文件，并提交给打印后端。
@@ -273,27 +350,54 @@ fn resolve_print_options(
     queued_job: &QueuedJob,
     config: &AgentConfig,
 ) -> Result<PrintOptions, ProcessJobError> {
-    let printer_name = config
-        .printing
-        .default_printer
-        .clone()
-        .ok_or(ProcessJobError::PrinterNotConfigured)?;
+    resolve_file_print_options(queued_job, config)
+}
+
+/// 解析文件类打印任务的打印机、纸张和份数设置。
+fn resolve_file_print_options(
+    queued_job: &QueuedJob,
+    config: &AgentConfig,
+) -> Result<PrintOptions, ProcessJobError> {
+    let printer_name = resolve_printer_name(queued_job, config)?;
     let paper = queued_job
         .job
         .paper
         .clone()
         .or_else(|| config.printing.default_paper.clone())
         .ok_or(ProcessJobError::PaperNotConfigured)?;
+    let copies = queued_job.job.copies.unwrap_or(1);
 
-    if queued_job.job.copies == 0 || queued_job.job.copies > config.limits.max_copies {
+    if copies == 0 || copies > config.limits.max_copies {
         return Err(ProcessJobError::CopiesOutOfRange);
     }
 
     Ok(PrintOptions {
         printer_name,
         paper: paper_info_from_effective(&paper),
-        copies: queued_job.job.copies,
+        copies,
     })
+}
+
+/// 解析 raw 打印任务的打印机设置。
+fn resolve_raw_print_options(
+    queued_job: &QueuedJob,
+    config: &AgentConfig,
+) -> Result<RawPrintOptions, ProcessJobError> {
+    Ok(RawPrintOptions {
+        printer_name: resolve_printer_name(queued_job, config)?,
+    })
+}
+
+fn resolve_printer_name(
+    queued_job: &QueuedJob,
+    config: &AgentConfig,
+) -> Result<String, ProcessJobError> {
+    queued_job
+        .job
+        .printer_name
+        .clone()
+        .or_else(|| config.printing.default_printer.clone())
+        .ok_or(ProcessJobError::PrinterNotConfigured)
 }
 
 /// 确保下载文档是可打印 PDF，并与请求格式一致。
@@ -368,6 +472,7 @@ fn supported_format_name(format: SupportedFormat) -> &'static str {
         SupportedFormat::Png => "png",
         SupportedFormat::Jpg => "jpg",
         SupportedFormat::Jpeg => "jpeg",
+        SupportedFormat::Raw => "raw",
     }
 }
 
@@ -423,7 +528,15 @@ async fn push_log_with_metadata(
     message: &str,
     options: Option<&PrintOptions>,
 ) {
-    push_log_with_metadata_and_remote(state, queued_job, status, message, options, true).await;
+    push_log_with_print_metadata_and_remote(
+        state,
+        queued_job,
+        status,
+        message,
+        options.map(file_metadata),
+        true,
+    )
+    .await;
 }
 
 async fn push_log_with_metadata_without_remote(
@@ -433,15 +546,82 @@ async fn push_log_with_metadata_without_remote(
     message: &str,
     options: Option<&PrintOptions>,
 ) {
-    push_log_with_metadata_and_remote(state, queued_job, status, message, options, false).await;
+    push_log_with_print_metadata_and_remote(
+        state,
+        queued_job,
+        status,
+        message,
+        options.map(file_metadata),
+        false,
+    )
+    .await;
 }
 
-async fn push_log_with_metadata_and_remote(
+async fn push_log_with_raw_metadata(
     state: &AppState,
     queued_job: &QueuedJob,
     status: JobStatus,
     message: &str,
-    options: Option<&PrintOptions>,
+    options: &RawPrintOptions,
+) {
+    push_log_with_print_metadata_and_remote(
+        state,
+        queued_job,
+        status,
+        message,
+        Some(raw_metadata(options)),
+        true,
+    )
+    .await;
+}
+
+async fn push_log_with_raw_metadata_without_remote(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    status: JobStatus,
+    message: &str,
+    options: &RawPrintOptions,
+) {
+    push_log_with_print_metadata_and_remote(
+        state,
+        queued_job,
+        status,
+        message,
+        Some(raw_metadata(options)),
+        false,
+    )
+    .await;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrintLogMetadata<'a> {
+    printer_name: Option<&'a str>,
+    paper_name: Option<&'a str>,
+    copies: Option<u16>,
+}
+
+fn file_metadata(options: &PrintOptions) -> PrintLogMetadata<'_> {
+    PrintLogMetadata {
+        printer_name: Some(&options.printer_name),
+        paper_name: Some(&options.paper.name),
+        copies: Some(options.copies),
+    }
+}
+
+fn raw_metadata(options: &RawPrintOptions) -> PrintLogMetadata<'_> {
+    PrintLogMetadata {
+        printer_name: Some(&options.printer_name),
+        paper_name: None,
+        copies: None,
+    }
+}
+
+async fn push_log_with_print_metadata_and_remote(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    status: JobStatus,
+    message: &str,
+    metadata: Option<PrintLogMetadata<'_>>,
     enqueue_remote: bool,
 ) {
     let entry = TaskLogEntry {
@@ -471,9 +651,9 @@ async fn push_log_with_metadata_and_remote(
             } else {
                 Some(message)
             },
-            printer_name: options.map(|value| value.printer_name.as_str()),
-            paper_name: options.map(|value| value.paper.name.as_str()),
-            copies: Some(queued_job.job.copies),
+            printer_name: metadata.and_then(|value| value.printer_name),
+            paper_name: metadata.and_then(|value| value.paper_name),
+            copies: metadata.and_then(|value| value.copies),
             occurred_at: &occurred_at,
         });
         if let Err(error) = result {
@@ -560,7 +740,7 @@ mod worker_tests {
         config::{AgentConfig, PrintingConfig},
         printing::{
             PaperInfo, PrintBackend, PrintOptions, PrintResult, PrintSubmission,
-            PrintTrackingOutcome, PrinterInfo,
+            PrintTrackingOutcome, PrinterInfo, RawPrintOptions,
         },
         protocol::{EffectivePaper, JobStatus, PrintJobInput, SupportedFormat},
         remote_store::{RemoteReportStatus, RemoteStore},
@@ -616,6 +796,42 @@ mod worker_tests {
 
         assert_eq!(options.paper.width_mm, 80.0);
         assert_eq!(options.paper.height_mm, 50.0);
+    }
+
+    #[test]
+    fn resolve_print_options_prefers_job_printer_over_default_printer() {
+        let config = config_with_defaults(Some(default_paper()));
+        let mut job = job_with(
+            "printer-override",
+            SupportedFormat::Pdf,
+            "http://127.0.0.1/file.pdf",
+            1,
+            None,
+        );
+        job.printer_name = Some("Printer B".to_string());
+        let queued = queued_job(job);
+
+        let options = resolve_print_options(&queued, &config).unwrap();
+
+        assert_eq!(options.printer_name, "Printer B");
+    }
+
+    #[tokio::test]
+    async fn process_raw_job_decodes_base64_and_calls_raw_backend() {
+        let backend = MockPrintBackend::default();
+        let raw_calls = backend.raw_calls.clone();
+        let state = AppState::with_printing(
+            config_with_defaults(Some(default_paper())),
+            Box::new(backend),
+        );
+        let queued = queued_job(raw_job_with("raw-job", "aGVsbG8="));
+
+        process_job(&state, queued).await;
+
+        let calls = raw_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].data, b"hello");
+        assert_eq!(calls[0].options.printer_name, "Printer A");
     }
 
     #[tokio::test]
@@ -957,6 +1173,7 @@ mod worker_tests {
     #[derive(Default)]
     struct MockPrintBackend {
         calls: Arc<Mutex<Vec<PrintCall>>>,
+        raw_calls: Arc<Mutex<Vec<RawPrintCall>>>,
         tracking_outcome: Option<PrintTrackingOutcome>,
     }
 
@@ -964,6 +1181,11 @@ mod worker_tests {
         path: PathBuf,
         path_bytes: Vec<u8>,
         options: PrintOptions,
+    }
+
+    struct RawPrintCall {
+        data: Vec<u8>,
+        options: RawPrintOptions,
     }
 
     impl PrintBackend for MockPrintBackend {
@@ -979,6 +1201,18 @@ mod worker_tests {
             self.calls.lock().unwrap().push(PrintCall {
                 path: path.to_path_buf(),
                 path_bytes: fs::read(path).unwrap(),
+                options: options.clone(),
+            });
+            Ok(mock_submission())
+        }
+
+        fn print_raw(
+            &self,
+            data: &[u8],
+            options: &RawPrintOptions,
+        ) -> PrintResult<PrintSubmission> {
+            self.raw_calls.lock().unwrap().push(RawPrintCall {
+                data: data.to_vec(),
                 options: options.clone(),
             });
             Ok(mock_submission())
@@ -1025,9 +1259,23 @@ mod worker_tests {
         PrintJobInput {
             job_id: job_id.to_string(),
             format,
-            file_url: file_url.to_string(),
-            copies,
+            printer_name: None,
+            file_url: Some(file_url.to_string()),
+            data_base64: None,
+            copies: Some(copies),
             paper,
+        }
+    }
+
+    fn raw_job_with(job_id: &str, data_base64: &str) -> PrintJobInput {
+        PrintJobInput {
+            job_id: job_id.to_string(),
+            format: SupportedFormat::Raw,
+            printer_name: None,
+            file_url: None,
+            data_base64: Some(data_base64.to_string()),
+            copies: None,
+            paper: None,
         }
     }
 

@@ -1,12 +1,22 @@
 use super::{
     common_label_papers, resolve_paper_for_print, submitted_at_rfc3339, sumatra_print_settings,
     PaperInfo, PrintBackend, PrintError, PrintOptions, PrintResult, PrintSubmission,
-    PrintTrackingOutcome, PrinterInfo,
+    PrintTrackingOutcome, PrinterInfo, RawPrintOptions,
 };
 use serde::Deserialize;
 use std::{
+    ffi::OsStr,
+    os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
     process::Command,
+    ptr,
+};
+use windows_sys::Win32::{
+    Foundation::HANDLE,
+    Graphics::Printing::{
+        ClosePrinter, EndDocPrinter, EndPagePrinter, OpenPrinterW, StartDocPrinterW,
+        StartPagePrinter, WritePrinter, DOC_INFO_1W,
+    },
 };
 
 /// Windows 打印后端：用 PowerShell 发现打印机，用 SumatraPDF 执行打印。
@@ -92,6 +102,19 @@ impl PrintBackend for WindowsPrintBackend {
         }
     }
 
+    /// 使用 Windows RAW spooler 把原始打印指令提交给打印机。
+    fn print_raw(&self, data: &[u8], options: &RawPrintOptions) -> PrintResult<PrintSubmission> {
+        ensure_printer_exists(self, &options.printer_name)?;
+        submit_raw_to_windows_printer(&options.printer_name, data)?;
+
+        Ok(PrintSubmission {
+            submitted_at: submitted_at_rfc3339(),
+            backend: "windows-raw-spooler".to_string(),
+            system_job_id: None,
+            tracking_supported: false,
+        })
+    }
+
     fn track_submission(
         &self,
         _submission: &PrintSubmission,
@@ -102,6 +125,70 @@ impl PrintBackend for WindowsPrintBackend {
                 .to_string(),
         }
     }
+}
+
+fn submit_raw_to_windows_printer(printer_name: &str, data: &[u8]) -> PrintResult<()> {
+    let printer_name_w = wide_null(printer_name);
+    let document_name_w = wide_null("PrintBridge Raw Job");
+    let data_type_w = wide_null("RAW");
+    let mut printer: HANDLE = 0;
+
+    unsafe {
+        if OpenPrinterW(
+            printer_name_w.as_ptr() as *mut _,
+            &mut printer,
+            ptr::null_mut(),
+        ) == 0
+        {
+            return Err(command_error("OpenPrinterW", last_os_error()));
+        }
+
+        let doc_info = DOC_INFO_1W {
+            pDocName: document_name_w.as_ptr() as *mut _,
+            pOutputFile: ptr::null_mut(),
+            pDatatype: data_type_w.as_ptr() as *mut _,
+        };
+
+        if StartDocPrinterW(printer, 1, &doc_info as *const _ as *mut _) == 0 {
+            ClosePrinter(printer);
+            return Err(command_error("StartDocPrinterW", last_os_error()));
+        }
+
+        if StartPagePrinter(printer) == 0 {
+            EndDocPrinter(printer);
+            ClosePrinter(printer);
+            return Err(command_error("StartPagePrinter", last_os_error()));
+        }
+
+        let mut written = 0_u32;
+        let ok = WritePrinter(
+            printer,
+            data.as_ptr() as *const _,
+            data.len() as u32,
+            &mut written,
+        );
+
+        EndPagePrinter(printer);
+        EndDocPrinter(printer);
+        ClosePrinter(printer);
+
+        if ok == 0 || written as usize != data.len() {
+            return Err(command_error("WritePrinter", last_os_error()));
+        }
+    }
+
+    Ok(())
+}
+
+fn wide_null(value: &str) -> Vec<u16> {
+    OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+fn last_os_error() -> String {
+    std::io::Error::last_os_error().to_string()
 }
 
 /// PowerShell 的 ConvertTo-Json 可能返回单个对象或数组。

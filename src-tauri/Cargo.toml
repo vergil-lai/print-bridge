@@ -44,5 +44,12 @@ tauri-plugin-log = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Printing",
+]
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

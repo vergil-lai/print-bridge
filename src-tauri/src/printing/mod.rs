@@ -31,6 +31,12 @@ pub struct PrintOptions {
     pub copies: u16,
 }
 
+/// 后端提交单个 raw 打印任务所需的选项。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawPrintOptions {
+    pub printer_name: String,
+}
+
 /// 平台打印命令成功提交后的可追踪信息。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrintSubmission {
@@ -71,6 +77,8 @@ pub trait PrintBackend {
     fn list_papers(&self, printer_name: &str) -> PrintResult<Vec<PaperInfo>>;
     /// 把 PDF 文件发送到平台打印队列。
     fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<PrintSubmission>;
+    /// 把原始打印指令字节发送到平台打印队列。
+    fn print_raw(&self, data: &[u8], options: &RawPrintOptions) -> PrintResult<PrintSubmission>;
     /// 查询平台队列对本次提交的保守状态。
     fn track_submission(
         &self,
@@ -79,6 +87,16 @@ pub trait PrintBackend {
     ) -> PrintTrackingOutcome {
         PrintTrackingOutcome::Unknown {
             message: "platform does not provide trackable print status".to_string(),
+        }
+    }
+    /// 查询平台队列对 raw 提交的保守状态。
+    fn track_raw_submission(
+        &self,
+        _submission: &PrintSubmission,
+        _options: &RawPrintOptions,
+    ) -> PrintTrackingOutcome {
+        PrintTrackingOutcome::Unknown {
+            message: "platform does not provide trackable raw print status".to_string(),
         }
     }
 }
@@ -126,6 +144,11 @@ impl PrintBackend for UnsupportedPrintBackend {
 
     /// 报告不支持的平台，而不是静默忽略打印任务。
     fn print_pdf(&self, _path: &Path, _options: &PrintOptions) -> PrintResult<PrintSubmission> {
+        Err(PrintError::UnsupportedPlatform)
+    }
+
+    /// 报告不支持的平台，而不是静默忽略 raw 打印任务。
+    fn print_raw(&self, _data: &[u8], _options: &RawPrintOptions) -> PrintResult<PrintSubmission> {
         Err(PrintError::UnsupportedPlatform)
     }
 }
