@@ -50,7 +50,7 @@ impl PrintBackend for WindowsPrintBackend {
             .args([
                 "-NoProfile",
                 "-Command",
-                "Get-Printer | Select-Object Name,Default | ConvertTo-Json",
+                "Get-Printer | ForEach-Object { $config = Get-PrintConfiguration -PrinterName $_.Name -ErrorAction SilentlyContinue; [PSCustomObject]@{ Name=$_.Name; Default=$_.Default; PortName=$_.PortName; Type=$_.Type.ToString(); DeviceType=$_.DeviceType.ToString(); DriverName=$_.DriverName; PrintQuality=if ($config) { $config.PrintQuality } else { $null } } } | ConvertTo-Json",
             ])
             .output()
             .map_err(|error| command_error("powershell", error.to_string()))?;
@@ -206,6 +206,16 @@ struct PowerShellPrinter {
     name: String,
     #[serde(rename = "Default", default)]
     default: bool,
+    #[serde(rename = "PortName", default)]
+    port_name: Option<String>,
+    #[serde(rename = "Type", default)]
+    printer_type: Option<String>,
+    #[serde(rename = "DeviceType", default)]
+    device_type: Option<String>,
+    #[serde(rename = "DriverName", default)]
+    driver_name: Option<String>,
+    #[serde(rename = "PrintQuality", default)]
+    print_quality: Option<serde_json::Value>,
 }
 
 /// 把 PowerShell 打印机 JSON 解析为平台无关的打印机摘要。
@@ -230,10 +240,90 @@ fn parse_printers_json(value: &str) -> PrintResult<Vec<PrinterInfo>> {
 impl From<PowerShellPrinter> for PrinterInfo {
     /// 把 PowerShell 字段名转换为共享打印机类型。
     fn from(value: PowerShellPrinter) -> Self {
+        let dpi = value
+            .print_quality
+            .as_ref()
+            .and_then(parse_print_quality_dpi);
+        let port = value.port_name.clone();
+        let (is_local, is_network, is_virtual) = classify_windows_printer(
+            value.name.as_str(),
+            value.printer_type.as_deref(),
+            value.device_type.as_deref(),
+            value.driver_name.as_deref(),
+            port.as_deref(),
+        );
+
         Self {
             name: value.name,
             is_default: value.default,
+            dpi,
+            port,
+            is_local,
+            is_network,
+            is_virtual,
         }
+    }
+}
+
+fn parse_print_quality_dpi(value: &serde_json::Value) -> Option<u32> {
+    match value {
+        serde_json::Value::Number(number) => {
+            number.as_u64().and_then(|value| value.try_into().ok())
+        }
+        serde_json::Value::String(value) => parse_dpi_text(value),
+        _ => None,
+    }
+}
+
+fn parse_dpi_text(value: &str) -> Option<u32> {
+    let lower = value.to_ascii_lowercase();
+    let dpi_index = lower.find("dpi").unwrap_or(lower.len());
+    lower[..dpi_index]
+        .split(|character: char| !character.is_ascii_digit())
+        .filter_map(|part| part.parse::<u32>().ok())
+        .max()
+}
+
+fn classify_windows_printer(
+    name: &str,
+    printer_type: Option<&str>,
+    device_type: Option<&str>,
+    driver_name: Option<&str>,
+    port: Option<&str>,
+) -> (Option<bool>, Option<bool>, Option<bool>) {
+    let text = [Some(name), printer_type, device_type, driver_name, port]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    let port = port.unwrap_or_default().to_ascii_lowercase();
+
+    let is_virtual = text.contains("pdf")
+        || text.contains("xps")
+        || text.contains("onenote")
+        || text.contains("fax")
+        || text.contains("document writer");
+    let is_network = port.starts_with("\\\\")
+        || port.starts_with("ip_")
+        || port.starts_with("tcp")
+        || port.starts_with("http")
+        || port.starts_with("wsd")
+        || text.contains("connection")
+        || text.contains("network");
+    let is_local = port.starts_with("usb")
+        || port.starts_with("lpt")
+        || port.starts_with("com")
+        || text.contains("local");
+
+    if is_virtual {
+        (Some(false), Some(false), Some(true))
+    } else if is_network {
+        (Some(false), Some(true), Some(false))
+    } else if is_local {
+        (Some(true), Some(false), Some(false))
+    } else {
+        (None, None, None)
     }
 }
 

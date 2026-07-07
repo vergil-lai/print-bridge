@@ -362,19 +362,49 @@ async fn handle_client_text(state: &AppState, text: &str) -> ClientTextOutcome {
                 ));
             };
 
-            match state.printing.list_papers(&printer.name) {
-                Ok(papers) => ClientTextOutcome::response(ServerMessage::PrinterInfo {
-                    request_id,
-                    printer: PrinterDetails {
-                        name: printer.name,
-                        is_default: printer.is_default,
-                        papers,
-                    },
-                }),
+            let papers = match state.printing.list_papers(&printer.name) {
+                Ok(papers) => papers,
                 Err(error) => {
-                    ClientTextOutcome::response(print_error_response(Some(request_id), error))
+                    return ClientTextOutcome::response(print_error_response(
+                        Some(request_id),
+                        error,
+                    ));
                 }
-            }
+            };
+            let trays = match state.printing.list_trays(&printer.name) {
+                Ok(trays) => trays,
+                Err(error) => {
+                    return ClientTextOutcome::response(print_error_response(
+                        Some(request_id),
+                        error,
+                    ));
+                }
+            };
+            let media_types = match state.printing.list_media_types(&printer.name) {
+                Ok(media_types) => media_types,
+                Err(error) => {
+                    return ClientTextOutcome::response(print_error_response(
+                        Some(request_id),
+                        error,
+                    ));
+                }
+            };
+
+            ClientTextOutcome::response(ServerMessage::PrinterInfo {
+                request_id,
+                printer: PrinterDetails {
+                    name: printer.name,
+                    is_default: printer.is_default,
+                    dpi: printer.dpi,
+                    port: printer.port,
+                    is_local: printer.is_local,
+                    is_network: printer.is_network,
+                    is_virtual: printer.is_virtual,
+                    papers,
+                    trays,
+                    media_types,
+                },
+            })
         }
         ClientMessage::GetPrintQueue { request_id } => {
             let jobs = state
@@ -934,8 +964,15 @@ mod tests {
                 printers: vec![PrinterInfo {
                     name: "Zebra ZD421".to_string(),
                     is_default: true,
+                    dpi: Some(203),
+                    port: Some("usb://Zebra/ZD421".to_string()),
+                    is_local: Some(true),
+                    is_network: Some(false),
+                    is_virtual: Some(false),
                 }],
                 papers: vec![],
+                trays: vec![],
+                media_types: vec![],
             }),
         );
 
@@ -952,6 +989,11 @@ mod tests {
                 printers: vec![PrinterInfo {
                     name: "Zebra ZD421".to_string(),
                     is_default: true,
+                    dpi: Some(203),
+                    port: Some("usb://Zebra/ZD421".to_string()),
+                    is_local: Some(true),
+                    is_network: Some(false),
+                    is_virtual: Some(false),
                 }],
             }
         );
@@ -965,12 +1007,25 @@ mod tests {
                 printers: vec![PrinterInfo {
                     name: "Zebra ZD421".to_string(),
                     is_default: true,
+                    dpi: Some(203),
+                    port: Some("usb://Zebra/ZD421".to_string()),
+                    is_local: Some(true),
+                    is_network: Some(false),
+                    is_virtual: Some(false),
                 }],
                 papers: vec![PaperInfo {
                     id: "label_60x40".to_string(),
                     name: "60 x 40 mm".to_string(),
                     width_mm: 60.0,
                     height_mm: 40.0,
+                }],
+                trays: vec![crate::printing::PrinterTrayInfo {
+                    id: "tray-1".to_string(),
+                    name: "Tray 1".to_string(),
+                }],
+                media_types: vec![crate::printing::PrinterMediaTypeInfo {
+                    id: "thermal-label".to_string(),
+                    name: "Thermal Label".to_string(),
                 }],
             }),
         );
@@ -988,11 +1043,24 @@ mod tests {
                 printer: super::PrinterDetails {
                     name: "Zebra ZD421".to_string(),
                     is_default: true,
+                    dpi: Some(203),
+                    port: Some("usb://Zebra/ZD421".to_string()),
+                    is_local: Some(true),
+                    is_network: Some(false),
+                    is_virtual: Some(false),
                     papers: vec![PaperInfo {
                         id: "label_60x40".to_string(),
                         name: "60 x 40 mm".to_string(),
                         width_mm: 60.0,
                         height_mm: 40.0,
+                    }],
+                    trays: vec![crate::printing::PrinterTrayInfo {
+                        id: "tray-1".to_string(),
+                        name: "Tray 1".to_string(),
+                    }],
+                    media_types: vec![crate::printing::PrinterMediaTypeInfo {
+                        id: "thermal-label".to_string(),
+                        name: "Thermal Label".to_string(),
                     }],
                 },
             }
@@ -1044,6 +1112,8 @@ mod tests {
     struct ListingPrintBackend {
         printers: Vec<PrinterInfo>,
         papers: Vec<PaperInfo>,
+        trays: Vec<crate::printing::PrinterTrayInfo>,
+        media_types: Vec<crate::printing::PrinterMediaTypeInfo>,
     }
 
     impl PrintBackend for ListingPrintBackend {
@@ -1053,6 +1123,20 @@ mod tests {
 
         fn list_papers(&self, _printer_name: &str) -> PrintResult<Vec<PaperInfo>> {
             Ok(self.papers.clone())
+        }
+
+        fn list_trays(
+            &self,
+            _printer_name: &str,
+        ) -> PrintResult<Vec<crate::printing::PrinterTrayInfo>> {
+            Ok(self.trays.clone())
+        }
+
+        fn list_media_types(
+            &self,
+            _printer_name: &str,
+        ) -> PrintResult<Vec<crate::printing::PrinterMediaTypeInfo>> {
+            Ok(self.media_types.clone())
         }
 
         fn print_pdf(&self, _path: &Path, _options: &PrintOptions) -> PrintResult<PrintSubmission> {

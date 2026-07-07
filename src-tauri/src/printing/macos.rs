@@ -1,9 +1,10 @@
 use super::{
     common_label_papers, cups_media_option, paper_name, resolve_paper_for_print,
     submitted_at_rfc3339, PaperInfo, PrintBackend, PrintError, PrintOptions, PrintResult,
-    PrintSubmission, PrintTrackingOutcome, PrinterInfo, RawPrintOptions,
+    PrintSubmission, PrintTrackingOutcome, PrinterInfo, PrinterMediaTypeInfo, PrinterTrayInfo,
+    RawPrintOptions,
 };
-use std::{io::Write, path::Path, process::Command};
+use std::{collections::HashMap, io::Write, path::Path, process::Command};
 
 /// 基于 CUPS 命令行工具的 macOS 打印后端。
 pub struct MacosPrintBackend;
@@ -13,32 +14,43 @@ impl PrintBackend for MacosPrintBackend {
     fn list_printers(&self) -> PrintResult<Vec<PrinterInfo>> {
         let printers_output = run_command("lpstat", &["-e"])?;
         let default_printer = current_default_printer();
+        let ports = current_printer_ports();
 
-        Ok(parse_lpstat_destinations(
-            &printers_output,
-            default_printer.as_deref(),
-        ))
+        let mut printers =
+            parse_lpstat_destinations(&printers_output, default_printer.as_deref(), &ports);
+        for printer in &mut printers {
+            printer.dpi = read_lpoptions(&printer.name)
+                .ok()
+                .and_then(|output| parse_lpoptions_dpi(&output));
+        }
+
+        Ok(printers)
     }
 
     /// 列出 CUPS 纸张选项；不可用时回退到常见标签纸尺寸。
     fn list_papers(&self, printer_name: &str) -> PrintResult<Vec<PaperInfo>> {
         ensure_printer_exists(self, printer_name)?;
 
-        let output = Command::new("lpoptions")
-            .args(["-p", printer_name, "-l"])
-            .output()
-            .map_err(|error| command_error("lpoptions", error.to_string()))?;
+        let output = read_lpoptions(printer_name)?;
 
-        if !output.status.success() {
-            return Err(PrintError::PrinterNotFound(printer_name.to_string()));
-        }
-
-        let papers = parse_lpoptions_papers(&String::from_utf8_lossy(&output.stdout));
+        let papers = parse_lpoptions_papers(&output);
         if papers.is_empty() {
             Ok(common_label_papers())
         } else {
             Ok(papers)
         }
+    }
+
+    /// 列出 CUPS 纸盒或进纸来源选项。
+    fn list_trays(&self, printer_name: &str) -> PrintResult<Vec<PrinterTrayInfo>> {
+        ensure_printer_exists(self, printer_name)?;
+        read_lpoptions(printer_name).map(|output| parse_lpoptions_trays(&output))
+    }
+
+    /// 列出 CUPS 介质类型选项。
+    fn list_media_types(&self, printer_name: &str) -> PrintResult<Vec<PrinterMediaTypeInfo>> {
+        ensure_printer_exists(self, printer_name)?;
+        read_lpoptions(printer_name).map(|output| parse_lpoptions_media_types(&output))
     }
 
     /// 使用明确的份数和介质设置把 PDF 发送给 CUPS。
@@ -187,7 +199,11 @@ fn completed_jobs_contains_job(output: &str, job_id: &str) -> bool {
 }
 
 /// 把 `lpstat -e` 输出解析为打印机摘要。
-fn parse_lpstat_destinations(output: &str, default_printer: Option<&str>) -> Vec<PrinterInfo> {
+fn parse_lpstat_destinations(
+    output: &str,
+    default_printer: Option<&str>,
+    ports: &HashMap<String, String>,
+) -> Vec<PrinterInfo> {
     output
         .lines()
         .filter_map(|line| {
@@ -196,10 +212,16 @@ fn parse_lpstat_destinations(output: &str, default_printer: Option<&str>) -> Vec
                 return None;
             }
 
-            Some(PrinterInfo {
-                name: name.to_string(),
-                is_default: default_printer == Some(name),
-            })
+            let mut printer = PrinterInfo::new(name.to_string(), default_printer == Some(name));
+            if let Some(port) = ports.get(name) {
+                let (is_local, is_network, is_virtual) = classify_port(port);
+                printer.port = Some(port.clone());
+                printer.is_local = is_local;
+                printer.is_network = is_network;
+                printer.is_virtual = is_virtual;
+            }
+
+            Some(printer)
         })
         .collect()
 }
@@ -209,6 +231,56 @@ fn current_default_printer() -> Option<String> {
     run_command("lpstat", &["-d"])
         .ok()
         .and_then(|output| parse_default_destination(&output))
+}
+
+/// 读取 CUPS 目标和设备 URI 的映射。
+fn current_printer_ports() -> HashMap<String, String> {
+    run_command("lpstat", &["-v"])
+        .ok()
+        .map(|output| parse_lpstat_devices(&output))
+        .unwrap_or_default()
+}
+
+/// 解析 `lpstat -v` 输出中的设备 URI。
+fn parse_lpstat_devices(output: &str) -> HashMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (prefix, port) = line.split_once(": ")?;
+            let name = prefix.strip_prefix("device for ").unwrap_or(prefix).trim();
+            if name.is_empty() || port.trim().is_empty() {
+                None
+            } else {
+                Some((name.to_string(), port.trim().to_string()))
+            }
+        })
+        .collect()
+}
+
+/// 根据 CUPS 设备 URI 做保守的本地/网络/虚拟分类。
+fn classify_port(port: &str) -> (Option<bool>, Option<bool>, Option<bool>) {
+    let lower = port.to_ascii_lowercase();
+    let is_virtual = lower.starts_with("file:") || lower.contains("pdf") || lower.contains("fax");
+    let is_network = lower.starts_with("ipp:")
+        || lower.starts_with("ipps:")
+        || lower.starts_with("http:")
+        || lower.starts_with("https:")
+        || lower.starts_with("socket:")
+        || lower.starts_with("lpd:")
+        || lower.starts_with("smb:")
+        || lower.starts_with("dnssd:");
+    let is_local =
+        lower.starts_with("usb:") || lower.starts_with("serial:") || lower.starts_with("parallel:");
+
+    if is_virtual {
+        (Some(false), Some(false), Some(true))
+    } else if is_network {
+        (Some(false), Some(true), Some(false))
+    } else if is_local {
+        (Some(true), Some(false), Some(false))
+    } else {
+        (None, None, None)
+    }
 }
 
 /// 解析本地化或英文的 `lpstat -d` 输出。
@@ -234,6 +306,87 @@ fn parse_lpoptions_papers(output: &str) -> Vec<PaperInfo> {
         })
         .flat_map(parse_paper_line)
         .collect()
+}
+
+/// 从 `lpoptions -l` 输出中提取纸盒或进纸来源。
+fn parse_lpoptions_trays(output: &str) -> Vec<PrinterTrayInfo> {
+    output
+        .lines()
+        .filter(|line| option_starts_with(line, &["inputslot/", "mediasource/"]))
+        .flat_map(|line| parse_option_choices(line).into_iter())
+        .map(|choice| PrinterTrayInfo {
+            id: choice.id,
+            name: choice.name,
+        })
+        .collect()
+}
+
+/// 从 `lpoptions -l` 输出中提取介质类型。
+fn parse_lpoptions_media_types(output: &str) -> Vec<PrinterMediaTypeInfo> {
+    output
+        .lines()
+        .filter(|line| option_starts_with(line, &["mediatype/", "mediaclass/"]))
+        .flat_map(|line| parse_option_choices(line).into_iter())
+        .map(|choice| PrinterMediaTypeInfo {
+            id: choice.id,
+            name: choice.name,
+        })
+        .collect()
+}
+
+/// 从 `lpoptions -l` 输出中提取当前或最高 DPI。
+fn parse_lpoptions_dpi(output: &str) -> Option<u32> {
+    output
+        .lines()
+        .filter(|line| option_starts_with(line, &["resolution/", "printerresolution/"]))
+        .flat_map(parse_option_choices)
+        .filter_map(|choice| parse_dpi_choice(&choice.id))
+        .max()
+}
+
+fn option_starts_with(line: &str, prefixes: &[&str]) -> bool {
+    let option = line.to_ascii_lowercase();
+    prefixes.iter().any(|prefix| option.starts_with(prefix))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OptionChoice {
+    id: String,
+    name: String,
+}
+
+/// 把一行 CUPS/PPD 选项解析为通用 choices。
+fn parse_option_choices(line: &str) -> Vec<OptionChoice> {
+    let Some((_, choices)) = line.split_once(':') else {
+        return Vec::new();
+    };
+
+    choices
+        .split_whitespace()
+        .filter_map(|choice| parse_option_choice(choice.trim_start_matches('*')))
+        .collect()
+}
+
+fn parse_option_choice(choice: &str) -> Option<OptionChoice> {
+    if choice.is_empty() {
+        return None;
+    }
+
+    let (id, name) = choice.split_once('/').unwrap_or((choice, choice));
+
+    Some(OptionChoice {
+        id: id.to_string(),
+        name: name.replace('_', " "),
+    })
+}
+
+fn parse_dpi_choice(choice: &str) -> Option<u32> {
+    let lower = choice.to_ascii_lowercase();
+    let dpi_index = lower.find("dpi").unwrap_or(lower.len());
+    lower[..dpi_index]
+        .split(|character: char| !character.is_ascii_digit())
+        .filter_map(|part| part.parse::<u32>().ok())
+        .max()
 }
 
 /// 把一行 CUPS 选项解析为该行中的所有纸张选项。
@@ -421,25 +574,81 @@ fn run_command(command: &str, args: &[&str]) -> PrintResult<String> {
     }
 }
 
+/// 读取指定打印机的 CUPS/PPD 选项。
+fn read_lpoptions(printer_name: &str) -> PrintResult<String> {
+    let output = Command::new("lpoptions")
+        .args(["-p", printer_name, "-l"])
+        .output()
+        .map_err(|error| command_error("lpoptions", error.to_string()))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(PrintError::PrinterNotFound(printer_name.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        completed_jobs_contains_job, parse_default_destination, parse_lp_job_id,
-        parse_lpoptions_papers, parse_lpstat_destinations,
+        classify_port, completed_jobs_contains_job, parse_default_destination, parse_lp_job_id,
+        parse_lpoptions_dpi, parse_lpoptions_media_types, parse_lpoptions_papers,
+        parse_lpoptions_trays, parse_lpstat_destinations, parse_lpstat_devices,
     };
+    use std::collections::HashMap;
 
     #[test]
     fn parses_lpstat_destinations_and_marks_default_printer() {
         let printers = parse_lpstat_destinations(
             "HP_LaserJet_Professional_M1136_MFP\nKONICA_MINOLTA_C364e\n",
             Some("HP_LaserJet_Professional_M1136_MFP"),
+            &HashMap::from([(
+                "HP_LaserJet_Professional_M1136_MFP".to_string(),
+                "usb://HP/LaserJet".to_string(),
+            )]),
         );
 
         assert_eq!(printers.len(), 2);
         assert_eq!(printers[0].name, "HP_LaserJet_Professional_M1136_MFP");
         assert!(printers[0].is_default);
+        assert_eq!(printers[0].port.as_deref(), Some("usb://HP/LaserJet"));
+        assert_eq!(printers[0].is_local, Some(true));
+        assert_eq!(printers[0].is_network, Some(false));
+        assert_eq!(printers[0].is_virtual, Some(false));
         assert_eq!(printers[1].name, "KONICA_MINOLTA_C364e");
         assert!(!printers[1].is_default);
+    }
+
+    #[test]
+    fn parses_lpstat_devices() {
+        let ports = parse_lpstat_devices(
+            "device for Label_Printer: socket://192.168.1.20\ndevice for PDF: file:///tmp/output.pdf\n",
+        );
+
+        assert_eq!(
+            ports.get("Label_Printer").map(String::as_str),
+            Some("socket://192.168.1.20")
+        );
+        assert_eq!(
+            ports.get("PDF").map(String::as_str),
+            Some("file:///tmp/output.pdf")
+        );
+    }
+
+    #[test]
+    fn classifies_common_printer_ports() {
+        assert_eq!(
+            classify_port("usb://Zebra/ZD421"),
+            (Some(true), Some(false), Some(false))
+        );
+        assert_eq!(
+            classify_port("ipp://printer.local/ipp/print"),
+            (Some(false), Some(true), Some(false))
+        );
+        assert_eq!(
+            classify_port("file:///tmp/output.pdf"),
+            (Some(false), Some(false), Some(true))
+        );
     }
 
     #[test]
@@ -531,6 +740,26 @@ Printer-2. user 1024 Mon Jul  6 00:00:00 2026
         assert_paper(&papers, "B6", 128.0, 182.0);
         assert_paper(&papers, "220 x 330 mm", 220.0, 330.0);
         assert_paper(&papers, "215.9 x 279.4 mm", 215.9, 279.4);
+    }
+
+    #[test]
+    fn parses_trays_media_types_and_dpi_from_cups_options() {
+        let output = "\
+InputSlot/Media Source: *Auto Tray1/Tray_1 Manual/Manual_Feed
+MediaType/Media Type: *Stationery Labels/Labels
+Resolution/Output Resolution: *203dpi 300x300dpi 600dpi
+";
+
+        let trays = parse_lpoptions_trays(output);
+        assert_eq!(trays[0].id, "Auto");
+        assert_eq!(trays[1].name, "Tray 1");
+        assert_eq!(trays[2].name, "Manual Feed");
+
+        let media_types = parse_lpoptions_media_types(output);
+        assert_eq!(media_types[0].id, "Stationery");
+        assert_eq!(media_types[1].name, "Labels");
+
+        assert_eq!(parse_lpoptions_dpi(output), Some(600));
     }
 
     fn assert_paper(papers: &[super::PaperInfo], name: &str, width_mm: f64, height_mm: f64) {

@@ -43,6 +43,11 @@ export interface AgentConfig {
 export interface PrinterInfo {
   name: string;
   is_default: boolean;
+  dpi: number | null;
+  port: string | null;
+  is_local: boolean | null;
+  is_network: boolean | null;
+  is_virtual: boolean | null;
 }
 
 /** 本地服务返回的纸张尺寸摘要。 */

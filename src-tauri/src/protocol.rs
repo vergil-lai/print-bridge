@@ -1,4 +1,4 @@
-use crate::printing::{PaperInfo, PrinterInfo};
+use crate::printing::{PaperInfo, PrinterInfo, PrinterMediaTypeInfo, PrinterTrayInfo};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
@@ -245,7 +245,14 @@ pub enum ServerMessage {
 pub struct PrinterDetails {
     pub name: String,
     pub is_default: bool,
+    pub dpi: Option<u32>,
+    pub port: Option<String>,
+    pub is_local: Option<bool>,
+    pub is_network: Option<bool>,
+    pub is_virtual: Option<bool>,
     pub papers: Vec<PaperInfo>,
+    pub trays: Vec<PrinterTrayInfo>,
+    pub media_types: Vec<PrinterMediaTypeInfo>,
 }
 
 /// 当前内存打印队列中的任务摘要。
