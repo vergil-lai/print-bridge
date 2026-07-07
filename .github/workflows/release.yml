@@ -84,3 +84,42 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  cleanup-release-signatures:
+    needs: publish-tauri
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read release tag
+        id: release
+        shell: bash
+        run: |
+          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
+          echo "tag=printbridge-v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Remove standalone updater signature assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          mapfile -t SIG_ASSETS < <(
+            gh release view "${{ steps.release.outputs.tag }}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '.assets[].name | select(endswith(".sig"))'
+          )
+
+          if [ "${#SIG_ASSETS[@]}" -eq 0 ]; then
+            echo "No standalone .sig release assets found."
+            exit 0
+          fi
+
+          for ASSET in "${SIG_ASSETS[@]}"; do
+            echo "Deleting release asset: ${ASSET}"
+            gh release delete-asset "${{ steps.release.outputs.tag }}" "${ASSET}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --yes
+          done
