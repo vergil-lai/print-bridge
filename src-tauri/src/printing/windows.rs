@@ -11,12 +11,9 @@ use std::{
     process::Command,
     ptr,
 };
-use windows_sys::Win32::{
-    Foundation::HANDLE,
-    Graphics::Printing::{
-        ClosePrinter, EndDocPrinter, EndPagePrinter, OpenPrinterW, StartDocPrinterW,
-        StartPagePrinter, WritePrinter, DOC_INFO_1W,
-    },
+use windows_sys::Win32::Graphics::Printing::{
+    ClosePrinter, EndDocPrinter, EndPagePrinter, OpenPrinterW, StartDocPrinterW, StartPagePrinter,
+    WritePrinter, DOC_INFO_1W, PRINTER_HANDLE,
 };
 
 /// Windows 打印后端：用 PowerShell 发现打印机，用 SumatraPDF 执行打印。
@@ -131,7 +128,9 @@ fn submit_raw_to_windows_printer(printer_name: &str, data: &[u8]) -> PrintResult
     let printer_name_w = wide_null(printer_name);
     let document_name_w = wide_null("PrintBridge Raw Job");
     let data_type_w = wide_null("RAW");
-    let mut printer: HANDLE = 0;
+    let mut printer = PRINTER_HANDLE {
+        Value: ptr::null_mut(),
+    };
 
     unsafe {
         if OpenPrinterW(
