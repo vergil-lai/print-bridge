@@ -15,6 +15,7 @@ docs
 printbridge.key
 AGENTS.md
 CLAUDE.md
+.codegraph
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
