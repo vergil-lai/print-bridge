@@ -2,6 +2,7 @@ use crate::protocol::JobStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+/// 内存任务日志默认保留条数。
 pub const DEFAULT_LOG_CAPACITY: usize = 500;
 
 /// 一条本地保存并通过 WebSocket 广播的任务状态记录。

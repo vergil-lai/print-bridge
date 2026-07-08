@@ -105,6 +105,7 @@ const MIN_SERVICE_PORT = 10000;
 const MAX_SERVICE_PORT = 65535;
 const MIN_REMOTE_POLL_INTERVAL_SECONDS = 3;
 const MIN_REMOTE_MAX_REPORT_RETRIES = 1;
+const REQUIRED_LOOPBACK_IP = '127.0.0.1';
 const THEME_STORAGE_KEY = 'printbridge.theme';
 type ThemeMode = 'system' | 'light' | 'dark';
 
@@ -117,6 +118,8 @@ const selectedTaskEvents = ref<TaskHistoryEvent[]>([]);
 const themeMode = ref<ThemeMode>(readThemeMode());
 const originDraft = ref('');
 const originErrorMessage = ref('');
+const ipDraft = ref('');
+const ipErrorMessage = ref('');
 const errorMessage = ref('');
 const successMessage = ref('');
 const loadingConfig = ref(true);
@@ -243,6 +246,10 @@ const selectedTask = computed(
 function normalizeConfig(value: AgentConfig): AgentConfig {
   return {
     ...value,
+    security: {
+      ...value.security,
+      allowed_ips: normalizeAllowedIps(value.security.allowed_ips ?? []),
+    },
     printing: {
       ...value.printing,
       default_paper: value.printing.default_paper ?? { ...DEFAULT_PAPER },
@@ -258,6 +265,7 @@ function defaultExportOptions(): ExportConfigOptions {
   return {
     service_port: true,
     allowed_origins: true,
+    allowed_ips: true,
     remote_enabled: true,
     remote_endpoint_url: true,
     remote_bearer_token: true,
@@ -768,6 +776,98 @@ function removeOrigin(origin: string): void {
   );
 }
 
+/** 规范化 IP 白名单，确保默认回环地址始终存在。 */
+function normalizeAllowedIps(entries: string[]): string[] {
+  const normalized = [REQUIRED_LOOPBACK_IP];
+  for (const rawEntry of entries) {
+    const entry = rawEntry.trim();
+    if (!entry || entry === REQUIRED_LOOPBACK_IP) continue;
+    if (!normalized.includes(entry)) normalized.push(entry);
+  }
+
+  return normalized;
+}
+
+/** 判断 IP 白名单项是否为不可删除的默认项。 */
+function isFixedAllowedIp(entry: string): boolean {
+  return entry === REQUIRED_LOOPBACK_IP;
+}
+
+/** 判断输入是否为禁止的任意地址项。 */
+function isAnyAddressEntry(entry: string): boolean {
+  return ['0.0.0.0', '::', '0.0.0.0/0', '::/0'].includes(entry);
+}
+
+/** 前端轻量校验 IP 或 CIDR，最终以后端校验为准。 */
+function isValidAllowedIpEntry(value: string): boolean {
+  const entry = value.trim();
+  if (!entry || isAnyAddressEntry(entry)) return false;
+
+  if (entry.includes('/')) {
+    const [address, prefixText, extra] = entry.split('/');
+    if (!address || !prefixText || extra !== undefined) return false;
+    const prefix = Number(prefixText);
+    if (!Number.isInteger(prefix)) return false;
+
+    const maxPrefix = address.includes(':') ? 128 : 32;
+    if (prefix <= 0 || prefix > maxPrefix) return false;
+
+    return isValidIpAddress(address);
+  }
+
+  return isValidIpAddress(entry);
+}
+
+/** 前端基础 IP 格式检查，避免明显错误；后端负责完整 IPv6/CIDR 解析。 */
+function isValidIpAddress(value: string): boolean {
+  if (value.includes(':')) {
+    return /^[0-9a-fA-F:]+$/.test(value) && value.includes(':');
+  }
+
+  const parts = value.split('.');
+  return (
+    parts.length === 4 &&
+    parts.every((part) => {
+      if (!/^\d+$/.test(part)) return false;
+      const number = Number(part);
+      return number >= 0 && number <= 255 && part === String(number);
+    })
+  );
+}
+
+/** 把校验通过的 IP 或 CIDR 加入允许列表。 */
+function addAllowedIp(): void {
+  if (!config.value) return;
+  const entry = ipDraft.value.trim();
+  ipErrorMessage.value = '';
+
+  if (!entry) return;
+  if (!isValidAllowedIpEntry(entry)) {
+    ipErrorMessage.value = isAnyAddressEntry(entry)
+      ? '0.0.0.0 不能作为白名单项，请填写具体 IP 或局域网网段'
+      : '请输入有效 IP 或 CIDR 网段';
+    return;
+  }
+  if (config.value.security.allowed_ips.includes(entry)) return;
+
+  config.value.security.allowed_ips.push(entry);
+  config.value.security.allowed_ips = normalizeAllowedIps(config.value.security.allowed_ips);
+  ipDraft.value = '';
+}
+
+/** 从 IP 白名单移除一个用户添加项。 */
+function removeAllowedIp(entry: string): void {
+  if (!config.value) return;
+  if (isFixedAllowedIp(entry)) {
+    ipErrorMessage.value = '127.0.0.1 是默认允许项，不能删除';
+    return;
+  }
+
+  config.value.security.allowed_ips = normalizeAllowedIps(
+    config.value.security.allowed_ips.filter((item) => item !== entry),
+  );
+}
+
 /** 格式化 RFC3339 时间用于展示。 */
 function formatDateTime(value: string): string {
   const date = new Date(value);
@@ -927,7 +1027,9 @@ onBeforeUnmount(() => {
 <template>
   <main class="min-h-screen bg-muted/30 px-4 py-4 text-foreground md:px-6">
     <div class="mx-auto flex w-full max-w-5xl flex-col gap-4">
-      <header class="flex flex-col gap-3 border-b bg-background/80 pb-4 md:flex-row md:items-center md:justify-between">
+      <header
+        class="flex flex-col gap-3 border-b bg-background/80 pb-4 md:flex-row md:items-center md:justify-between"
+      >
         <div>
           <h1 class="text-xl font-semibold tracking-normal">PrintBridge</h1>
           <p class="text-sm text-muted-foreground">本地端口 {{ servicePort || '-' }}</p>
@@ -940,11 +1042,19 @@ onBeforeUnmount(() => {
             <Save class="size-4" />
             {{ saving ? '保存中' : '保存' }}
           </Button>
-          <Button variant="outline" :disabled="!config || exportingConfig" @click="openExportDialog">
+          <Button
+            variant="outline"
+            :disabled="!config || exportingConfig"
+            @click="openExportDialog"
+          >
             <FileDown class="size-4" />
             导出配置
           </Button>
-          <Button variant="outline" :disabled="!config || importingConfig" @click="openImportDialog">
+          <Button
+            variant="outline"
+            :disabled="!config || importingConfig"
+            @click="openImportDialog"
+          >
             <FileUp class="size-4" />
             导入配置
           </Button>
@@ -952,23 +1062,39 @@ onBeforeUnmount(() => {
       </header>
 
       <div v-if="errorMessage || successMessage" class="grid gap-2 text-sm">
-        <Alert v-if="errorMessage" variant="error" class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <Alert
+          v-if="errorMessage"
+          variant="error"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
+        >
           <AlertDescription class="min-w-0 break-words">
             {{ errorMessage }}
           </AlertDescription>
-          <Button variant="ghost" size="icon-sm"
-            class="shrink-0 text-destructive hover:bg-destructive/15 hover:text-destructive" aria-label="关闭错误提示"
-            @click="dismissMessage('error')">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="shrink-0 text-destructive hover:bg-destructive/15 hover:text-destructive"
+            aria-label="关闭错误提示"
+            @click="dismissMessage('error')"
+          >
             <X class="size-4" />
           </Button>
         </Alert>
-        <Alert v-if="successMessage" variant="success" class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <Alert
+          v-if="successMessage"
+          variant="success"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
+        >
           <AlertDescription class="min-w-0 break-words">
             {{ successMessage }}
           </AlertDescription>
-          <Button variant="ghost" size="icon-sm"
+          <Button
+            variant="ghost"
+            size="icon-sm"
             class="shrink-0 text-emerald-800 hover:bg-emerald-500/15 hover:text-emerald-900 dark:text-emerald-200 dark:hover:text-emerald-100"
-            aria-label="关闭成功提示" @click="dismissMessage('success')">
+            aria-label="关闭成功提示"
+            @click="dismissMessage('success')"
+          >
             <X class="size-4" />
           </Button>
         </Alert>
@@ -981,10 +1107,11 @@ onBeforeUnmount(() => {
       </Card>
 
       <Tabs v-else-if="config" default-value="settings">
-        <TabsList class="grid w-full grid-cols-5 md:w-[600px]">
+        <TabsList class="grid w-full grid-cols-6 md:w-[720px]">
           <TabsTrigger value="settings"> 设置 </TabsTrigger>
           <TabsTrigger value="remote"> 远程 </TabsTrigger>
-          <TabsTrigger value="security"> 安全 </TabsTrigger>
+          <TabsTrigger value="website-whitelist"> 网站白名单 </TabsTrigger>
+          <TabsTrigger value="ip-whitelist"> IP白名单 </TabsTrigger>
           <TabsTrigger value="logs"> 任务 </TabsTrigger>
           <TabsTrigger value="updates"> 关于 </TabsTrigger>
         </TabsList>
@@ -998,24 +1125,39 @@ onBeforeUnmount(() => {
               <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
                 <div class="grid gap-2">
                   <Label for="default-printer">默认打印机</Label>
-                  <Select :model-value="selectedPrinter" @update:model-value="handlePrinterChange(String($event))">
+                  <Select
+                    :model-value="selectedPrinter"
+                    @update:model-value="handlePrinterChange(String($event))"
+                  >
                     <SelectTrigger id="default-printer" class="w-full">
                       <SelectValue placeholder="选择打印机" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem v-for="printer in printers" :key="printer.name" :value="printer.name">
+                      <SelectItem
+                        v-for="printer in printers"
+                        :key="printer.name"
+                        :value="printer.name"
+                      >
                         {{ printer.name }}{{ printer.is_default ? '（系统默认）' : '' }}
                       </SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                <Button class="whitespace-nowrap" variant="outline" :disabled="loadingPrinters"
-                  @click="refreshPrinters">
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="loadingPrinters"
+                  @click="refreshPrinters"
+                >
                   <RefreshCw class="size-4" :class="{ 'animate-spin': loadingPrinters }" />
                   刷新
                 </Button>
-                <Button class="whitespace-nowrap" variant="outline" :disabled="!canTestPrint || testingPrint"
-                  @click="handleTestPrint">
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="!canTestPrint || testingPrint"
+                  @click="handleTestPrint"
+                >
                   <Printer class="size-4" />
                   {{ testingPrint ? '提交中' : '测试打印' }}
                 </Button>
@@ -1026,7 +1168,10 @@ onBeforeUnmount(() => {
               >
                 <div class="grid gap-2">
                   <Label for="default-paper">默认纸张</Label>
-                  <Select :model-value="selectedPaper" @update:model-value="selectedPaper = String($event)">
+                  <Select
+                    :model-value="selectedPaper"
+                    @update:model-value="selectedPaper = String($event)"
+                  >
                     <SelectTrigger id="default-paper" class="w-full">
                       <SelectValue placeholder="选择纸张" />
                     </SelectTrigger>
@@ -1049,14 +1194,27 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="grid gap-2">
                   <Label for="paper-width">宽度（mm）</Label>
-                  <Input id="paper-width" type="number" min="1" step="0.1"
+                  <Input
+                    id="paper-width"
+                    type="number"
+                    min="1"
+                    step="0.1"
                     :model-value="config.printing.default_paper?.width_mm ?? DEFAULT_PAPER.width_mm"
-                    @update:model-value="setPaperDimension('width_mm', $event)" />
+                    @update:model-value="setPaperDimension('width_mm', $event)"
+                  />
                 </div>
                 <div class="grid gap-2">
                   <Label for="paper-height">高度（mm）</Label>
-                  <Input id="paper-height" type="number" min="1" step="0.1" :model-value="config.printing.default_paper?.height_mm ?? DEFAULT_PAPER.height_mm
-                    " @update:model-value="setPaperDimension('height_mm', $event)" />
+                  <Input
+                    id="paper-height"
+                    type="number"
+                    min="1"
+                    step="0.1"
+                    :model-value="
+                      config.printing.default_paper?.height_mm ?? DEFAULT_PAPER.height_mm
+                    "
+                    @update:model-value="setPaperDimension('height_mm', $event)"
+                  />
                 </div>
               </div>
 
@@ -1065,8 +1223,14 @@ onBeforeUnmount(() => {
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
                   <Label for="service-port">本地端口</Label>
-                  <Input id="service-port" type="number" :min="MIN_SERVICE_PORT" :max="MAX_SERVICE_PORT" :model-value="config.service.port"
-                    @update:model-value="setPort" />
+                  <Input
+                    id="service-port"
+                    type="number"
+                    :min="MIN_SERVICE_PORT"
+                    :max="MAX_SERVICE_PORT"
+                    :model-value="config.service.port"
+                    @update:model-value="setPort"
+                  />
                   <p v-if="hasPendingPortChange" class="text-xs text-muted-foreground">
                     当前会话仍连接 {{ activePort }}，保存后将重启应用生效。
                   </p>
@@ -1136,12 +1300,20 @@ onBeforeUnmount(() => {
               <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <div class="grid min-w-0 gap-2">
                   <Label for="remote-url">任务 URL</Label>
-                  <Input id="remote-url" type="url" placeholder="https://api.example.com/print-task"
+                  <Input
+                    id="remote-url"
+                    type="url"
+                    placeholder="https://api.example.com/print-task"
                     :model-value="config.remote.endpoint_url ?? ''"
-                    @update:model-value="setRemoteString('endpoint_url', $event)" />
+                    @update:model-value="setRemoteString('endpoint_url', $event)"
+                  />
                 </div>
-                <Button class="whitespace-nowrap" variant="outline" :disabled="!config.remote.enabled || testingRemote"
-                  @click="handleTestRemoteConnection">
+                <Button
+                  class="whitespace-nowrap"
+                  variant="outline"
+                  :disabled="!config.remote.enabled || testingRemote"
+                  @click="handleTestRemoteConnection"
+                >
                   <RefreshCw class="size-4" :class="{ 'animate-spin': testingRemote }" />
                   {{ testingRemote ? '测试中' : '测试连接' }}
                 </Button>
@@ -1149,18 +1321,31 @@ onBeforeUnmount(() => {
 
               <div class="grid gap-2">
                 <Label for="remote-token">Authorization Bearer Token</Label>
-                <Input id="remote-token" type="password" autocomplete="off"
+                <Input
+                  id="remote-token"
+                  type="password"
+                  autocomplete="off"
                   :model-value="config.remote.bearer_token ?? ''"
-                  @update:model-value="setRemoteString('bearer_token', $event)" />
+                  @update:model-value="setRemoteString('bearer_token', $event)"
+                />
               </div>
 
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
                   <Label for="remote-device-id">Device ID</Label>
                   <div class="flex gap-2">
-                    <Input id="remote-device-id" class="min-w-0 flex-1" :model-value="config.remote.device_id ?? ''"
-                      @update:model-value="setRemoteString('device_id', $event)" />
-                    <Button class="whitespace-nowrap" variant="outline" type="button" @click="generateRemoteDeviceId">
+                    <Input
+                      id="remote-device-id"
+                      class="min-w-0 flex-1"
+                      :model-value="config.remote.device_id ?? ''"
+                      @update:model-value="setRemoteString('device_id', $event)"
+                    />
+                    <Button
+                      class="whitespace-nowrap"
+                      variant="outline"
+                      type="button"
+                      @click="generateRemoteDeviceId"
+                    >
                       <Shuffle class="size-4" />
                       随机生成
                     </Button>
@@ -1168,38 +1353,54 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="grid gap-2">
                   <Label for="remote-device-name">Device Name</Label>
-                  <Input id="remote-device-name" :model-value="config.remote.device_name ?? ''"
-                    @update:model-value="setRemoteString('device_name', $event)" />
+                  <Input
+                    id="remote-device-name"
+                    :model-value="config.remote.device_name ?? ''"
+                    @update:model-value="setRemoteString('device_name', $event)"
+                  />
                 </div>
               </div>
 
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
                   <Label for="remote-poll-interval">轮询时间（秒）</Label>
-                  <Input id="remote-poll-interval" type="number" :min="MIN_REMOTE_POLL_INTERVAL_SECONDS"
+                  <Input
+                    id="remote-poll-interval"
+                    type="number"
+                    :min="MIN_REMOTE_POLL_INTERVAL_SECONDS"
                     :model-value="config.remote.poll_interval_seconds"
-                    @update:model-value="setRemoteNumber('poll_interval_seconds', $event)" />
+                    @update:model-value="setRemoteNumber('poll_interval_seconds', $event)"
+                  />
                 </div>
                 <div class="grid gap-2">
                   <Label for="remote-max-retries">上报重试次数</Label>
-                  <Input id="remote-max-retries" type="number" :min="MIN_REMOTE_MAX_REPORT_RETRIES" :model-value="config.remote.max_report_retries"
-                    @update:model-value="setRemoteNumber('max_report_retries', $event)" />
+                  <Input
+                    id="remote-max-retries"
+                    type="number"
+                    :min="MIN_REMOTE_MAX_REPORT_RETRIES"
+                    :model-value="config.remote.max_report_retries"
+                    @update:model-value="setRemoteNumber('max_report_retries', $event)"
+                  />
                 </div>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="security" class="mt-2">
+        <TabsContent value="website-whitelist" class="mt-2">
           <Card>
             <CardHeader class="pb-3">
-              <CardTitle class="text-base"> Origin 白名单 </CardTitle>
+              <CardTitle class="text-base"> 网站白名单 </CardTitle>
             </CardHeader>
             <CardContent class="grid gap-4">
               <form class="flex items-start gap-2" @submit.prevent="addOrigin">
                 <div class="grid flex-1 gap-1">
-                  <Input v-model="originDraft" placeholder="https://example.com" autocomplete="off"
-                    :aria-invalid="originErrorMessage ? 'true' : 'false'" />
+                  <Input
+                    v-model="originDraft"
+                    placeholder="https://example.com"
+                    autocomplete="off"
+                    :aria-invalid="originErrorMessage ? 'true' : 'false'"
+                  />
                   <p v-if="originErrorMessage" class="text-xs text-destructive">
                     {{ originErrorMessage }}
                   </p>
@@ -1207,17 +1408,70 @@ onBeforeUnmount(() => {
                 <Button type="submit"> 添加 </Button>
               </form>
               <div class="grid gap-2">
-                <div v-for="origin in config.security.allowed_origins" :key="origin"
-                  class="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                <div
+                  v-for="origin in config.security.allowed_origins"
+                  :key="origin"
+                  class="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                >
                   <span class="truncate">{{ origin }}</span>
-                  <Button variant="ghost" size="icon-sm" aria-label="删除 Origin" @click="removeOrigin(origin)">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="删除 Origin"
+                    @click="removeOrigin(origin)"
+                  >
                     <Trash2 class="size-4" />
                   </Button>
                 </div>
-                <p v-if="config.security.allowed_origins.length === 0"
-                  class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
+                <p
+                  v-if="config.security.allowed_origins.length === 0"
+                  class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground"
+                >
                   暂无白名单 Origin
                 </p>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="ip-whitelist" class="mt-2">
+          <Card>
+            <CardHeader class="pb-3">
+              <CardTitle class="text-base"> IP 白名单 </CardTitle>
+            </CardHeader>
+            <CardContent class="grid gap-4">
+              <form class="flex items-start gap-2" @submit.prevent="addAllowedIp">
+                <div class="grid flex-1 gap-1">
+                  <Input
+                    v-model="ipDraft"
+                    placeholder="192.168.1.23 或 192.168.1.0/24"
+                    autocomplete="off"
+                    :aria-invalid="ipErrorMessage ? 'true' : 'false'"
+                  />
+                  <p v-if="ipErrorMessage" class="text-xs text-destructive">
+                    {{ ipErrorMessage }}
+                  </p>
+                </div>
+                <Button type="submit"> 添加 </Button>
+              </form>
+              <div class="grid gap-2">
+                <div
+                  v-for="entry in config.security.allowed_ips"
+                  :key="entry"
+                  class="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
+                >
+                  <span class="truncate">{{ entry }}</span>
+                  <Button
+                    v-if="!isFixedAllowedIp(entry)"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="删除 IP 白名单"
+                    @click="removeAllowedIp(entry)"
+                  >
+                    <Trash2 class="size-4" />
+                  </Button>
+                  <Badge v-else variant="secondary"> 默认 </Badge>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -1253,29 +1507,43 @@ onBeforeUnmount(() => {
                       <ExternalLink class="size-4" />
                       更新日志
                     </Button>
-                    <Button variant="outline" :disabled="checkingUpdate || installingUpdate" @click="checkForUpdate">
+                    <Button
+                      variant="outline"
+                      :disabled="checkingUpdate || installingUpdate"
+                      @click="checkForUpdate"
+                    >
                       <RefreshCw class="size-4" :class="{ 'animate-spin': checkingUpdate }" />
                       {{ checkingUpdate ? '检查中' : '检查更新' }}
                     </Button>
-                    <Button v-if="availableUpdate && updateStatus !== 'installed'" :disabled="installingUpdate"
-                      @click="installAvailableUpdate">
+                    <Button
+                      v-if="availableUpdate && updateStatus !== 'installed'"
+                      :disabled="installingUpdate"
+                      @click="installAvailableUpdate"
+                    >
                       <Download class="size-4" />
                       {{ updateButtonLabel }}
                     </Button>
-                    <Button v-if="updateStatus === 'installed'" variant="outline" @click="restartAfterUpdate">
+                    <Button
+                      v-if="updateStatus === 'installed'"
+                      variant="outline"
+                      @click="restartAfterUpdate"
+                    >
                       <RotateCw class="size-4" />
                       重启应用
                     </Button>
                   </div>
                 </div>
 
-                <div class="rounded-md border px-4 py-3 text-sm" :class="{
-                  'border-primary/40 bg-primary/10 text-primary': updateStatus === 'available',
-                  'border-destructive/30 bg-destructive/10 text-destructive':
-                    updateStatus === 'error',
-                  'bg-muted/40 text-muted-foreground':
-                    updateStatus !== 'available' && updateStatus !== 'error',
-                }">
+                <div
+                  class="rounded-md border px-4 py-3 text-sm"
+                  :class="{
+                    'border-primary/40 bg-primary/10 text-primary': updateStatus === 'available',
+                    'border-destructive/30 bg-destructive/10 text-destructive':
+                      updateStatus === 'error',
+                    'bg-muted/40 text-muted-foreground':
+                      updateStatus !== 'available' && updateStatus !== 'error',
+                  }"
+                >
                   <span v-if="updateStatus === 'available'">
                     检测到新版本：{{ availableUpdateVersion }}
                   </span>
@@ -1285,8 +1553,10 @@ onBeforeUnmount(() => {
 
                 <div v-if="installingUpdate" class="grid gap-2">
                   <div class="h-2 overflow-hidden rounded-full bg-muted">
-                    <div class="h-full rounded-full bg-primary transition-all"
-                      :style="{ width: `${updateProgressPercent}%` }" />
+                    <div
+                      class="h-full rounded-full bg-primary transition-all"
+                      :style="{ width: `${updateProgressPercent}%` }"
+                    />
                   </div>
                   <p class="text-xs text-muted-foreground">
                     {{ updateProgressText }}
@@ -1296,7 +1566,8 @@ onBeforeUnmount(() => {
                 <div v-if="updateInfo?.body" class="grid gap-2">
                   <Label>更新说明</Label>
                   <div
-                    class="max-h-36 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/20 px-3 py-2 text-sm">
+                    class="max-h-36 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/20 px-3 py-2 text-sm"
+                  >
                     {{ updateInfo.body }}
                   </div>
                 </div>
@@ -1310,14 +1581,21 @@ onBeforeUnmount(() => {
             <CardHeader class="flex flex-row items-center justify-between pb-3">
               <CardTitle class="text-base"> 打印任务 </CardTitle>
               <div class="flex items-center gap-2">
-                <Button variant="outline" size="sm" :disabled="loadingTaskHistory || clearingTaskHistory"
-                  @click="refreshTaskHistory">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="loadingTaskHistory || clearingTaskHistory"
+                  @click="refreshTaskHistory"
+                >
                   <RefreshCw class="size-4" :class="{ 'animate-spin': loadingTaskHistory }" />
                   刷新
                 </Button>
-                <Button :variant="confirmingClearTaskHistory ? 'destructive' : 'outline'" size="sm"
+                <Button
+                  :variant="confirmingClearTaskHistory ? 'destructive' : 'outline'"
+                  size="sm"
                   :disabled="loadingTaskHistory || clearingTaskHistory || taskHistory.length === 0"
-                  @click="handleClearTaskHistory">
+                  @click="handleClearTaskHistory"
+                >
                   <Trash2 class="size-4" />
                   {{ confirmingClearTaskHistory ? '确认清空' : '清空' }}
                 </Button>
@@ -1340,8 +1618,14 @@ onBeforeUnmount(() => {
                     <TableEmpty v-if="taskHistory.length === 0" :colspan="6">
                       {{ loadingTaskHistory ? '正在加载任务...' : '暂无任务' }}
                     </TableEmpty>
-                    <TableRow v-for="entry in taskHistory" v-else :key="entry.job_id" class="cursor-pointer"
-                      :class="{ 'bg-muted/60': selectedTaskJobId === entry.job_id }" @click="selectTask(entry.job_id)">
+                    <TableRow
+                      v-for="entry in taskHistory"
+                      v-else
+                      :key="entry.job_id"
+                      class="cursor-pointer"
+                      :class="{ 'bg-muted/60': selectedTaskJobId === entry.job_id }"
+                      @click="selectTask(entry.job_id)"
+                    >
                       <TableCell class="whitespace-nowrap text-muted-foreground">
                         {{ formatDateTime(entry.updated_at) }}
                       </TableCell>
@@ -1384,15 +1668,24 @@ onBeforeUnmount(() => {
                   <div v-if="!selectedTaskJobId" class="px-3 py-8 text-sm text-muted-foreground">
                     暂无选中任务
                   </div>
-                  <div v-else-if="loadingTaskEvents" class="px-3 py-8 text-sm text-muted-foreground">
+                  <div
+                    v-else-if="loadingTaskEvents"
+                    class="px-3 py-8 text-sm text-muted-foreground"
+                  >
                     正在加载状态...
                   </div>
-                  <div v-else-if="selectedTaskEvents.length === 0" class="px-3 py-8 text-sm text-muted-foreground">
+                  <div
+                    v-else-if="selectedTaskEvents.length === 0"
+                    class="px-3 py-8 text-sm text-muted-foreground"
+                  >
                     暂无状态记录
                   </div>
                   <div v-else class="grid gap-3 p-3">
-                    <div v-for="event in selectedTaskEvents" :key="event.id"
-                      class="grid min-w-0 gap-1 border-l-2 border-muted-foreground/30 pl-3">
+                    <div
+                      v-for="event in selectedTaskEvents"
+                      :key="event.id"
+                      class="grid min-w-0 gap-1 border-l-2 border-muted-foreground/30 pl-3"
+                    >
                       <div class="flex flex-wrap items-center gap-2">
                         <Badge variant="outline">
                           {{ taskStatusLabel(event.status) }}
@@ -1413,8 +1706,10 @@ onBeforeUnmount(() => {
         </TabsContent>
       </Tabs>
 
-      <div v-if="showExportDialog"
-        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm">
+      <div
+        v-if="showExportDialog"
+        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
+      >
         <Card class="w-full max-w-lg">
           <CardHeader class="pb-3">
             <CardTitle class="text-base">导出配置</CardTitle>
@@ -1427,7 +1722,11 @@ onBeforeUnmount(() => {
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.allowed_origins" type="checkbox" />
-                Origin 白名单列表
+                网站白名单
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="exportOptions.allowed_ips" type="checkbox" />
+                IP 白名单
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.remote_enabled" type="checkbox" />
@@ -1463,11 +1762,19 @@ onBeforeUnmount(() => {
             </Alert>
 
             <div class="flex flex-wrap justify-end gap-2">
-              <Button variant="outline" :disabled="exportingConfig" @click="showExportDialog = false">
+              <Button
+                variant="outline"
+                :disabled="exportingConfig"
+                @click="showExportDialog = false"
+              >
                 取消
               </Button>
-              <Button v-if="showEmptyPasswordTokenConfirm" variant="outline" :disabled="exportingConfig"
-                @click="confirmEmptyPasswordExport">
+              <Button
+                v-if="showEmptyPasswordTokenConfirm"
+                variant="outline"
+                :disabled="exportingConfig"
+                @click="confirmEmptyPasswordExport"
+              >
                 确认空密码导出
               </Button>
               <Button :disabled="exportingConfig" @click="handleExportConfig">
@@ -1478,8 +1785,10 @@ onBeforeUnmount(() => {
         </Card>
       </div>
 
-      <div v-if="showImportDialog"
-        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm">
+      <div
+        v-if="showImportDialog"
+        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
+      >
         <div class="flex max-h-full w-full items-center justify-center">
           <Card class="flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col">
             <CardHeader class="shrink-0 pb-3">
@@ -1489,8 +1798,17 @@ onBeforeUnmount(() => {
               <div class="grid gap-2">
                 <Label for="import-path">配置文件</Label>
                 <div class="flex gap-2">
-                  <Input id="import-path" class="min-w-0 flex-1" :model-value="importPath" readonly />
-                  <Button variant="outline" :disabled="previewingConfigImport" @click="chooseImportFile">
+                  <Input
+                    id="import-path"
+                    class="min-w-0 flex-1"
+                    :model-value="importPath"
+                    readonly
+                  />
+                  <Button
+                    variant="outline"
+                    :disabled="previewingConfigImport"
+                    @click="chooseImportFile"
+                  >
                     选择
                   </Button>
                 </div>
@@ -1498,8 +1816,12 @@ onBeforeUnmount(() => {
 
               <div class="grid gap-2">
                 <Label for="import-password">密码</Label>
-                <Input id="import-password" v-model="importPassword" type="password"
-                  @update:model-value="resetImportPreview" />
+                <Input
+                  id="import-password"
+                  v-model="importPassword"
+                  type="password"
+                  @update:model-value="resetImportPreview"
+                />
               </div>
 
               <Alert v-if="importErrorMessage" variant="error">
@@ -1508,13 +1830,20 @@ onBeforeUnmount(() => {
                 </AlertDescription>
               </Alert>
 
-              <div v-if="importPreview" class="flex min-h-0 flex-col gap-2 rounded-md border bg-muted/20 p-3">
+              <div
+                v-if="importPreview"
+                class="flex min-h-0 flex-col gap-2 rounded-md border bg-muted/20 p-3"
+              >
                 <div class="shrink-0 text-sm font-medium">导入变更</div>
                 <div v-if="importPreview.items.length === 0" class="text-sm text-muted-foreground">
                   没有可导入的变更
                 </div>
                 <div v-else class="grid max-h-[35vh] min-h-0 gap-2 overflow-y-auto pr-1">
-                  <div v-for="item in importPreview.items" :key="item.key" class="grid gap-1 text-sm">
+                  <div
+                    v-for="item in importPreview.items"
+                    :key="item.key"
+                    class="grid gap-1 text-sm"
+                  >
                     <div class="font-medium">{{ item.label }}</div>
                     <div class="break-words text-muted-foreground">
                       {{ item.current }} -> {{ item.next }}
@@ -1524,19 +1853,29 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="flex shrink-0 flex-wrap justify-end gap-2">
-                <Button variant="outline" :disabled="previewingConfigImport || importingConfig"
-                  @click="showImportDialog = false">
+                <Button
+                  variant="outline"
+                  :disabled="previewingConfigImport || importingConfig"
+                  @click="showImportDialog = false"
+                >
                   取消
                 </Button>
-                <Button variant="outline" :disabled="!importPath || previewingConfigImport || importingConfig"
-                  @click="handlePreviewConfigImport">
+                <Button
+                  variant="outline"
+                  :disabled="!importPath || previewingConfigImport || importingConfig"
+                  @click="handlePreviewConfigImport"
+                >
                   {{ previewingConfigImport ? '预览中' : '预览' }}
                 </Button>
-                <Button :disabled="!importPreview ||
-                  importPreview.items.length === 0 ||
-                  previewingConfigImport ||
-                  importingConfig
-                  " @click="handleImportConfig">
+                <Button
+                  :disabled="
+                    !importPreview ||
+                    importPreview.items.length === 0 ||
+                    previewingConfigImport ||
+                    importingConfig
+                  "
+                  @click="handleImportConfig"
+                >
                   {{ importingConfig ? '导入中' : '确认导入' }}
                 </Button>
               </div>

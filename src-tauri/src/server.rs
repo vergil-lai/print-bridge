@@ -1,6 +1,7 @@
 use crate::{
     app_state::AppState,
     config::AgentConfig,
+    ip_whitelist::is_client_ip_allowed,
     logs::TaskLogEntry,
     printing::{PaperInfo, PrintError, PrinterInfo},
     protocol::{
@@ -12,13 +13,15 @@ use crate::{
 };
 use axum::{
     extract::{
+        connect_info::ConnectInfo,
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        Path, Request, State,
     },
     http::{
         header::{CONTENT_TYPE, ORIGIN},
         HeaderMap, HeaderValue, Method, StatusCode,
     },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -27,7 +30,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    net::{AddrParseError, SocketAddr},
+    net::{AddrParseError, IpAddr, SocketAddr},
     str::FromStr,
 };
 use thiserror::Error;
@@ -77,6 +80,10 @@ pub fn router(state: AppState) -> Router {
         .route("/logs", get(get_logs))
         .route("/print/test", post(print_test))
         .route("/ws", get(ws_handler))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            ip_whitelist_middleware,
+        ))
         .with_state(state)
         .layer(settings_cors_layer())
 }
@@ -104,7 +111,11 @@ pub async fn run_server(state: AppState) -> Result<(), ServerError> {
     let addr = configured_addr(&config)?;
     let listener = TcpListener::bind(addr).await?;
 
-    axum::serve(listener, router(state)).await?;
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -206,6 +217,41 @@ async fn ws_handler(
 pub async fn is_ws_origin_allowed(state: &AppState, origin: Option<&str>) -> bool {
     let config = state.config.read().await;
     is_allowed_origin(origin, &config.security.allowed_origins)
+}
+
+/// 检查客户端 IP 是否被当前配置允许。
+pub async fn is_client_ip_allowed_for_state(state: &AppState, client_ip: IpAddr) -> bool {
+    let config = state.config.read().await;
+    is_client_ip_allowed(client_ip, &config.security.allowed_ips)
+}
+
+/// 在所有 HTTP/WebSocket 路由前拦截未进入 IP 白名单的客户端。
+async fn ip_whitelist_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(ConnectInfo(addr)) = request.extensions().get::<ConnectInfo<SocketAddr>>() else {
+        return next.run(request).await;
+    };
+
+    if is_client_ip_allowed_for_state(&state, addr.ip()).await {
+        next.run(request).await
+    } else {
+        client_ip_error_response()
+    }
+}
+
+/// 构造客户端 IP 未进入白名单时的 HTTP 错误响应。
+fn client_ip_error_response() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ErrorResponse {
+            error_code: ErrorCode::OriginNotAllowed,
+            message: "client ip is not allowed".to_string(),
+        }),
+    )
+        .into_response()
 }
 
 /// 检查仅供桌面设置 UI 调用的 HTTP API Origin。
@@ -668,10 +714,11 @@ mod tests {
             RawPrintOptions,
         },
         protocol::{ErrorCode, JobStatus, ServerMessage},
-        server::{configured_addr, health, is_ws_origin_allowed},
+        server::{configured_addr, health, is_client_ip_allowed_for_state, is_ws_origin_allowed},
     };
     use axum::{
         body::{to_bytes, Body},
+        extract::connect_info::ConnectInfo,
         http::{
             header::{
                 ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_METHOD, CONTENT_TYPE, ORIGIN,
@@ -682,6 +729,7 @@ mod tests {
     use std::{
         collections::HashSet,
         fs,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
         path::{Path, PathBuf},
         sync::{Arc, Mutex},
     };
@@ -1203,6 +1251,7 @@ mod tests {
         let config = AgentConfig {
             security: SecurityConfig {
                 allowed_origins: vec!["http://localhost:5173".to_string()],
+                allowed_ips: vec!["127.0.0.1".to_string()],
             },
             ..AgentConfig::default()
         };
@@ -1211,5 +1260,73 @@ mod tests {
         assert!(is_ws_origin_allowed(&state, Some("http://localhost:5173")).await);
         assert!(!is_ws_origin_allowed(&state, Some("https://evil.example")).await);
         assert!(!is_ws_origin_allowed(&state, None).await);
+    }
+
+    #[tokio::test]
+    async fn client_ip_gate_allows_loopback_even_when_missing_from_config() {
+        let config = AgentConfig {
+            security: SecurityConfig {
+                allowed_origins: Vec::new(),
+                allowed_ips: Vec::new(),
+            },
+            ..AgentConfig::default()
+        };
+        let state = AppState::new(config);
+
+        assert!(
+            is_client_ip_allowed_for_state(&state, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))).await
+        );
+    }
+
+    #[tokio::test]
+    async fn client_ip_gate_uses_single_ip_and_cidr_entries() {
+        let config = AgentConfig {
+            security: SecurityConfig {
+                allowed_origins: Vec::new(),
+                allowed_ips: vec![
+                    "127.0.0.1".to_string(),
+                    "192.168.1.0/24".to_string(),
+                    "10.0.0.8".to_string(),
+                ],
+            },
+            ..AgentConfig::default()
+        };
+        let state = AppState::new(config);
+
+        assert!(
+            is_client_ip_allowed_for_state(&state, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)))
+                .await
+        );
+        assert!(
+            is_client_ip_allowed_for_state(&state, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 8))).await
+        );
+        assert!(
+            !is_client_ip_allowed_for_state(&state, IpAddr::V4(Ipv4Addr::new(192, 168, 2, 20)))
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn http_routes_reject_disallowed_client_ip() {
+        let config = AgentConfig {
+            security: SecurityConfig {
+                allowed_origins: Vec::new(),
+                allowed_ips: vec!["127.0.0.1".to_string()],
+            },
+            ..AgentConfig::default()
+        };
+        let app = super::router(AppState::new(config));
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([192, 168, 1, 20], 50000))));
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }

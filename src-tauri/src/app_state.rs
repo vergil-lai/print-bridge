@@ -1,5 +1,6 @@
 use crate::{
     config::{AgentConfig, MIN_REMOTE_MAX_REPORT_RETRIES, MIN_REMOTE_POLL_INTERVAL_SECONDS},
+    ip_whitelist::validate_allowed_ip_entry,
     logs::LogStore,
     logs::TaskLogEntry,
     printing::{default_backend, PrintBackend},
@@ -93,11 +94,15 @@ impl AppState {
 
     /// 校验、按需持久化并应用新配置。
     pub async fn save_config(&self, config: AgentConfig) -> Result<AgentConfig, io::Error> {
-        let config = config.normalized();
         for origin in &config.security.allowed_origins {
             validate_origin(origin)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         }
+        for entry in &config.security.allowed_ips {
+            validate_allowed_ip_entry(entry)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        }
+        let config = config.normalized();
         if config.remote.poll_interval_seconds < MIN_REMOTE_POLL_INTERVAL_SECONDS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -141,6 +146,17 @@ mod tests {
         let state = AppState::new(AgentConfig::default());
         let mut config = AgentConfig::default();
         config.remote.poll_interval_seconds = MIN_REMOTE_POLL_INTERVAL_SECONDS - 1;
+
+        let error = state.save_config(config).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[tokio::test]
+    async fn save_config_rejects_invalid_allowed_ips() {
+        let state = AppState::new(AgentConfig::default());
+        let mut config = AgentConfig::default();
+        config.security.allowed_ips = vec!["127.0.0.1".to_string(), "0.0.0.0".to_string()];
 
         let error = state.save_config(config).await.unwrap_err();
 

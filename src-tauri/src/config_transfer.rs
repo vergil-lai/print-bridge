@@ -1,4 +1,7 @@
-use crate::config::{AgentConfig, MIN_REMOTE_POLL_INTERVAL_SECONDS};
+use crate::{
+    config::{AgentConfig, MIN_REMOTE_POLL_INTERVAL_SECONDS},
+    ip_whitelist::validate_allowed_ip_entry,
+};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
@@ -24,10 +27,12 @@ const ARGON2_ITERATIONS: u32 = 2;
 const ARGON2_PARALLELISM: u32 = 1;
 const GCM_TAG_BYTES: u8 = 16;
 
+/// 导出配置时各配置项是否包含在文件中的选项。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportConfigOptions {
     pub service_port: bool,
     pub allowed_origins: bool,
+    pub allowed_ips: bool,
     pub remote_enabled: bool,
     pub remote_endpoint_url: bool,
     pub remote_bearer_token: bool,
@@ -36,10 +41,12 @@ pub struct ExportConfigOptions {
 }
 
 impl ExportConfigOptions {
+    /// 返回包含所有可导出配置项的默认选项。
     pub fn all() -> Self {
         Self {
             service_port: true,
             allowed_origins: true,
+            allowed_ips: true,
             remote_enabled: true,
             remote_endpoint_url: true,
             remote_bearer_token: true,
@@ -49,6 +56,7 @@ impl ExportConfigOptions {
     }
 }
 
+/// 加密配置文件在磁盘上的外层结构。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncryptedConfigFile {
     pub format: String,
@@ -57,6 +65,7 @@ pub struct EncryptedConfigFile {
     pub payload: String,
 }
 
+/// 加密配置文件使用的 KDF 和加密算法参数。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CryptoMetadata {
     pub kdf: String,
@@ -69,6 +78,7 @@ pub struct CryptoMetadata {
     pub nonce: String,
 }
 
+/// 加密前的 PrintBridge 配置迁移载荷。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigTransferPayload {
     pub format: String,
@@ -76,6 +86,7 @@ pub struct ConfigTransferPayload {
     pub config: PartialTransferConfig,
 }
 
+/// 配置迁移载荷中按模块拆分的可选配置。
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PartialTransferConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,18 +97,23 @@ pub struct PartialTransferConfig {
     pub remote: Option<PartialRemoteTransferConfig>,
 }
 
+/// 配置迁移载荷中的本地服务设置。
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PartialServiceTransferConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
 }
 
+/// 配置迁移载荷中的安全白名单设置。
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PartialSecurityTransferConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_origins: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_ips: Option<Vec<String>>,
 }
 
+/// 配置迁移载荷中的远程任务设置。
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PartialRemoteTransferConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,12 +136,14 @@ pub struct PartialRemoteTransferConfig {
     pub max_report_retries: Option<u32>,
 }
 
+/// 导入配置前展示给前端的差异预览。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ImportPreview {
     pub file_hash: String,
     pub items: Vec<ImportPreviewItem>,
 }
 
+/// 导入预览中的单个配置项变化。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ImportPreviewItem {
     pub key: String,
@@ -134,6 +152,7 @@ pub struct ImportPreviewItem {
     pub next: String,
 }
 
+/// 配置导入导出过程中的错误。
 #[derive(Debug, Error)]
 pub enum ConfigTransferError {
     #[error("不是有效的 PrintBridge 配置文件")]
@@ -152,6 +171,7 @@ impl From<io::Error> for ConfigTransferError {
     }
 }
 
+/// 把加密配置文件写入指定路径。
 pub fn write_encrypted_file(
     path: &Path,
     file: &EncryptedConfigFile,
@@ -161,11 +181,13 @@ pub fn write_encrypted_file(
     Ok(())
 }
 
+/// 从指定路径读取加密配置文件。
 pub fn read_encrypted_file(path: &Path) -> Result<EncryptedConfigFile, ConfigTransferError> {
     let (file, _) = read_encrypted_file_with_hash(path)?;
     Ok(file)
 }
 
+/// 读取加密配置文件，并返回文件内容哈希用于导入确认。
 pub fn read_encrypted_file_with_hash(
     path: &Path,
 ) -> Result<(EncryptedConfigFile, String), ConfigTransferError> {
@@ -189,6 +211,7 @@ fn sha256_hex(content: &[u8]) -> String {
 mod double_option {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    /// 序列化可区分“未选择”和“选择为空值”的嵌套 Option。
     pub fn serialize<S, T>(value: &Option<Option<T>>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -200,6 +223,7 @@ mod double_option {
         }
     }
 
+    /// 反序列化可区分“未选择”和“选择为空值”的嵌套 Option。
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
     where
         D: Deserializer<'de>,
@@ -209,6 +233,7 @@ mod double_option {
     }
 }
 
+/// 根据导出选项从完整配置构建迁移载荷。
 pub fn build_transfer_payload(
     config: &AgentConfig,
     options: &ExportConfigOptions,
@@ -219,10 +244,14 @@ pub fn build_transfer_payload(
             port: Some(config.service.port),
         });
 
-    let security = options
-        .allowed_origins
-        .then(|| PartialSecurityTransferConfig {
-            allowed_origins: Some(config.security.allowed_origins.clone()),
+    let security =
+        (options.allowed_origins || options.allowed_ips).then(|| PartialSecurityTransferConfig {
+            allowed_origins: options
+                .allowed_origins
+                .then(|| config.security.allowed_origins.clone()),
+            allowed_ips: options
+                .allowed_ips
+                .then(|| config.security.allowed_ips.clone()),
         });
 
     let remote = build_remote_transfer(config, options);
@@ -270,6 +299,7 @@ fn build_remote_transfer(
     }
 }
 
+/// 使用密码把配置迁移载荷加密为可保存文件。
 pub fn encrypt_payload(
     payload: &ConfigTransferPayload,
     password: &str,
@@ -304,6 +334,7 @@ pub fn encrypt_payload(
     })
 }
 
+/// 使用密码解密配置文件并校验载荷格式。
 pub fn decrypt_payload(
     file: &EncryptedConfigFile,
     password: &str,
@@ -329,6 +360,7 @@ pub fn decrypt_payload(
     Ok(payload)
 }
 
+/// 把导入载荷合并到当前配置，并校验字段合法性。
 pub fn merge_payload(
     current: &AgentConfig,
     payload: &ConfigTransferPayload,
@@ -355,6 +387,12 @@ pub fn merge_payload(
                 })?;
             }
             next.security.allowed_origins = allowed_origins.clone();
+        }
+        if let Some(allowed_ips) = &security.allowed_ips {
+            for entry in allowed_ips {
+                validate_allowed_ip_entry(entry).map_err(ConfigTransferError::InvalidField)?;
+            }
+            next.security.allowed_ips = allowed_ips.clone();
         }
     }
 
@@ -399,6 +437,7 @@ pub fn merge_payload(
     Ok(next.normalized())
 }
 
+/// 生成导入载荷对当前配置的变更预览。
 pub fn preview_payload(
     current: &AgentConfig,
     payload: &ConfigTransferPayload,
@@ -428,9 +467,23 @@ pub fn preview_payload(
     {
         items.push(preview_item(
             "security.allowed_origins",
-            "Origin 白名单列表",
+            "网站白名单",
             format!("{} 项", current.security.allowed_origins.len()),
             format!("{} 项", next.security.allowed_origins.len()),
+        ));
+    }
+
+    if payload
+        .config
+        .security
+        .as_ref()
+        .is_some_and(|security| security.allowed_ips.is_some())
+    {
+        items.push(preview_item(
+            "security.allowed_ips",
+            "IP 白名单",
+            format!("{} 项", current.security.allowed_ips.len()),
+            format!("{} 项", next.security.allowed_ips.len()),
         ));
     }
 
@@ -607,6 +660,7 @@ mod tests {
         let mut config = AgentConfig::default();
         config.service.port = 19090;
         config.security.allowed_origins = vec!["https://example.com".to_string()];
+        config.security.allowed_ips = vec!["127.0.0.1".to_string(), "192.168.1.0/24".to_string()];
         config.remote = RemoteConfig {
             enabled: true,
             endpoint_url: Some("https://api.example.com/tasks".to_string()),
@@ -626,6 +680,7 @@ mod tests {
         let options = ExportConfigOptions {
             service_port: true,
             allowed_origins: false,
+            allowed_ips: true,
             remote_enabled: true,
             remote_endpoint_url: false,
             remote_bearer_token: false,
@@ -638,7 +693,12 @@ mod tests {
         assert_eq!(payload.format, "printbridge-config");
         assert_eq!(payload.version, 1);
         assert_eq!(payload.config.service.unwrap().port, Some(19090));
-        assert!(payload.config.security.is_none());
+        let security = payload.config.security.unwrap();
+        assert_eq!(security.allowed_origins, None);
+        assert_eq!(
+            security.allowed_ips,
+            Some(vec!["127.0.0.1".to_string(), "192.168.1.0/24".to_string()])
+        );
         let remote = payload.config.remote.unwrap();
         assert_eq!(remote.enabled, Some(true));
         assert_eq!(remote.poll_interval_seconds, Some(15));
@@ -826,6 +886,33 @@ mod tests {
             merged.security.allowed_origins,
             vec!["https://new.example.com".to_string()]
         );
+    }
+
+    #[test]
+    fn merge_payload_replaces_allowed_ips_and_restores_loopback() {
+        let current = sample_config();
+        let mut payload = build_transfer_payload(&current, &ExportConfigOptions::all());
+        payload.config.security.as_mut().unwrap().allowed_ips =
+            Some(vec!["10.0.0.0/24".to_string()]);
+
+        let merged = merge_payload(&current, &payload).unwrap();
+
+        assert_eq!(
+            merged.security.allowed_ips,
+            vec!["127.0.0.1".to_string(), "10.0.0.0/24".to_string()]
+        );
+    }
+
+    #[test]
+    fn merge_payload_rejects_invalid_allowed_ips() {
+        let current = sample_config();
+        let mut payload = build_transfer_payload(&current, &ExportConfigOptions::all());
+        payload.config.security.as_mut().unwrap().allowed_ips = Some(vec!["0.0.0.0".to_string()]);
+
+        assert!(matches!(
+            merge_payload(&current, &payload).unwrap_err(),
+            ConfigTransferError::InvalidField(_)
+        ));
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub enum DownloadError {
     Request(reqwest::Error),
 }
 
+/// 文件下载和临时文件写入的统一返回结果。
 pub type DownloadResult<T> = Result<T, DownloadError>;
 
 /// 把已校验的 HTTP(S) 或 PDF data URL 文件保存到唯一临时路径。

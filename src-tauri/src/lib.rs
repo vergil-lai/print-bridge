@@ -5,6 +5,7 @@ pub mod config;
 pub mod config_transfer;
 pub mod document;
 pub mod download;
+pub mod ip_whitelist;
 pub mod logs;
 pub mod office;
 pub mod printing;
@@ -101,6 +102,7 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// 从当前进程参数运行 CLI，供独立二进制入口调用。
 pub fn run_cli_from_env() -> i32 {
     cli::run_cli_from_env()
 }

@@ -10,6 +10,7 @@ use crate::{
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 
+/// 单次远程任务拉取的处理结果。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PollOutcome {
     pub received: usize,
@@ -17,6 +18,7 @@ pub struct PollOutcome {
     pub duplicated: usize,
 }
 
+/// 单次远程状态回报的处理结果。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReportOutcome {
     pub delivered: usize,
@@ -24,6 +26,7 @@ pub struct ReportOutcome {
     pub abandoned: usize,
 }
 
+/// 远程 worker 拉取任务或回报状态时返回的错误。
 #[derive(Debug, Error)]
 pub enum RemoteWorkerError {
     #[error(transparent)]
@@ -38,6 +41,7 @@ pub enum RemoteWorkerError {
     InvalidTask(String),
 }
 
+/// 运行远程任务轮询和状态回报后台循环。
 pub async fn run_worker(state: AppState) {
     let client = RemoteClient::default();
 
@@ -62,6 +66,7 @@ pub async fn run_worker(state: AppState) {
     }
 }
 
+/// 执行一次远程任务拉取并把新任务加入本地队列。
 pub async fn poll_once(
     state: &AppState,
     client: &RemoteClient,
@@ -130,6 +135,7 @@ async fn validate_remote_job(
         .map_err(|error| RemoteWorkerError::InvalidTask(error.to_string()))
 }
 
+/// 执行一次待回报状态事件投递。
 pub async fn report_pending_once(
     state: &AppState,
     client: &RemoteClient,

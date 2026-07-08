@@ -1,22 +1,41 @@
-use crate::protocol::EffectivePaper;
+use crate::{
+    ip_whitelist::{normalize_allowed_ips, REQUIRED_LOOPBACK_IP},
+    protocol::EffectivePaper,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
 };
 
+/// 系统配置目录中使用的应用目录名。
 pub const APP_CONFIG_DIR_NAME: &str = "com.vergil.printbridge";
+/// Agent 配置文件名。
 pub const CONFIG_FILE_NAME: &str = "config.json";
+/// 本地任务历史数据库文件名。
 pub const TASK_HISTORY_FILE_NAME: &str = "task_history.sqlite3";
+/// 覆盖配置文件路径的环境变量名。
 pub const CONFIG_PATH_OVERRIDE_ENV: &str = "PRINT_BRIDGE_CONFIG_PATH";
+/// 覆盖数据目录路径的环境变量名。
 pub const DATA_DIR_OVERRIDE_ENV: &str = "PRINT_BRIDGE_DATA_DIR";
 
+/// 用户可配置的最小本地服务端口。
 pub const MIN_SERVICE_PORT: u16 = 10000;
+/// 用户可配置的最大本地服务端口。
 pub const MAX_SERVICE_PORT: u16 = u16::MAX;
+/// PrintBridge Agent 默认本地服务端口。
 pub const DEFAULT_PORT: u16 = 17890;
+/// 远程任务轮询允许的最小间隔秒数。
 pub const MIN_REMOTE_POLL_INTERVAL_SECONDS: u64 = 3;
+/// 远程状态回报允许的最小重试次数。
 pub const MIN_REMOTE_MAX_REPORT_RETRIES: u32 = 1;
 
+/// 返回默认 IP 白名单，保留本机回环地址。
+fn default_allowed_ips() -> Vec<String> {
+    vec![REQUIRED_LOOPBACK_IP.to_string()]
+}
+
+/// 返回 CLI 使用的配置文件路径。
 pub fn cli_config_path() -> Result<PathBuf, io::Error> {
     if let Some(path) = env::var_os(CONFIG_PATH_OVERRIDE_ENV) {
         return Ok(PathBuf::from(path));
@@ -25,6 +44,7 @@ pub fn cli_config_path() -> Result<PathBuf, io::Error> {
     Ok(cli_config_dir()?.join(CONFIG_FILE_NAME))
 }
 
+/// 返回 CLI 使用的任务历史数据库路径。
 pub fn cli_task_history_path() -> Result<PathBuf, io::Error> {
     if let Some(dir) = env::var_os(DATA_DIR_OVERRIDE_ENV) {
         return Ok(PathBuf::from(dir).join(TASK_HISTORY_FILE_NAME));
@@ -91,6 +111,8 @@ pub struct ServiceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecurityConfig {
     pub allowed_origins: Vec<String>,
+    #[serde(default = "default_allowed_ips")]
+    pub allowed_ips: Vec<String>,
 }
 
 /// 打印任务未提供覆盖项时使用的默认打印设置。
@@ -154,6 +176,7 @@ impl Default for AgentConfig {
             },
             security: SecurityConfig {
                 allowed_origins: Vec::new(),
+                allowed_ips: default_allowed_ips(),
             },
             printing: PrintingConfig {
                 default_printer: None,
@@ -176,6 +199,7 @@ impl AgentConfig {
     /// 保持兼容字段为本机默认值；服务端实际监听地址由 server 模块决定。
     pub fn normalized(mut self) -> Self {
         self.service.host = "127.0.0.1".to_string();
+        self.security.allowed_ips = normalize_allowed_ips(self.security.allowed_ips);
         self
     }
 

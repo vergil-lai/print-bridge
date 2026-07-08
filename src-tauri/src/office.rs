@@ -4,6 +4,7 @@ use std::{fs, io, path::Path};
 use thiserror::Error;
 use zip::{result::ZipError, ZipArchive};
 
+/// 可转换为 PDF 的 Office 文档格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OfficeFormat {
     Docx,
@@ -11,6 +12,7 @@ pub enum OfficeFormat {
     Pptx,
 }
 
+/// Office 文档检测或转换为 PDF 时返回的错误。
 #[derive(Debug, Error)]
 pub enum OfficeConvertError {
     #[error("unsupported office format")]
@@ -21,6 +23,7 @@ pub enum OfficeConvertError {
     Convert(#[from] office2pdf::error::ConvertError),
 }
 
+/// 把协议中的支持格式映射为 Office 转换格式。
 pub fn office_format_from_supported(format: SupportedFormat) -> Option<OfficeFormat> {
     match format {
         SupportedFormat::Docx => Some(OfficeFormat::Docx),
@@ -30,6 +33,7 @@ pub fn office_format_from_supported(format: SupportedFormat) -> Option<OfficeFor
     }
 }
 
+/// 根据 OOXML 容器内容检测 Office 文档格式。
 pub fn detect_office_format(path: &Path) -> Result<Option<OfficeFormat>, OfficeConvertError> {
     let file = fs::File::open(path)?;
     let mut archive = match ZipArchive::new(file) {
@@ -53,6 +57,7 @@ pub fn detect_office_format(path: &Path) -> Result<Option<OfficeFormat>, OfficeC
     Ok(None)
 }
 
+/// 把 Office 文档转换为 PDF 并写入指定路径。
 pub fn office_to_pdf(
     input_path: &Path,
     format: OfficeFormat,

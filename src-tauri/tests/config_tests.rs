@@ -40,6 +40,7 @@ fn agent_config_defaults_match_grouped_baseline() {
     assert_eq!(config.service.host, "127.0.0.1");
     assert_eq!(config.service.port, 17890);
     assert!(config.security.allowed_origins.is_empty());
+    assert_eq!(config.security.allowed_ips, vec!["127.0.0.1".to_string()]);
     assert_eq!(config.printing.default_printer, None);
     assert_eq!(config.printing.default_paper, None);
     assert_eq!(config.printing.default_copies, 1);
@@ -67,6 +68,7 @@ fn agent_config_json_roundtrips() {
         },
         security: SecurityConfig {
             allowed_origins: vec!["http://localhost:5173".to_string()],
+            allowed_ips: vec!["127.0.0.1".to_string(), "192.168.1.0/24".to_string()],
         },
         printing: PrintingConfig {
             default_printer: Some("TSC TE244".to_string()),
@@ -123,6 +125,35 @@ fn agent_config_loads_legacy_json_without_remote_config() {
     let decoded: AgentConfig = serde_json::from_str(json).unwrap();
 
     assert_eq!(decoded.remote, RemoteConfig::default());
+    assert_eq!(decoded.security.allowed_ips, vec!["127.0.0.1".to_string()]);
+}
+
+#[test]
+fn agent_config_loads_legacy_json_without_allowed_ips() {
+    let json = r#"{
+        "service": { "host": "127.0.0.1", "port": 17890 },
+        "security": { "allowed_origins": ["https://example.com"] },
+        "printing": {
+            "default_printer": null,
+            "default_paper": null,
+            "default_copies": 1
+        },
+        "limits": {
+            "max_file_size_mb": 20,
+            "max_batch_jobs": 20,
+            "max_copies": 100,
+            "download_timeout_seconds": 30
+        },
+        "app": { "autostart": false }
+    }"#;
+
+    let decoded: AgentConfig = serde_json::from_str(json).unwrap();
+
+    assert_eq!(
+        decoded.security.allowed_origins,
+        vec!["https://example.com"]
+    );
+    assert_eq!(decoded.security.allowed_ips, vec!["127.0.0.1"]);
 }
 
 #[test]

@@ -42,6 +42,7 @@ pub async fn save_config(
     save_config_for_state(config, &state).await
 }
 
+/// 导出当前配置到加密文件。
 #[tauri::command]
 pub async fn export_config_file(
     path: String,
@@ -55,6 +56,7 @@ pub async fn export_config_file(
     write_encrypted_file(&PathBuf::from(path), &encrypted).map_err(|error| error.to_string())
 }
 
+/// 解密配置文件并返回导入前差异预览。
 #[tauri::command]
 pub async fn preview_config_import(
     path: String,
@@ -70,6 +72,7 @@ pub async fn preview_config_import(
     Ok(preview)
 }
 
+/// 解密并导入配置文件，要求文件哈希和预览时一致。
 #[tauri::command]
 pub async fn import_config_file(
     path: String,
@@ -141,11 +144,13 @@ pub async fn get_logs(state: State<'_, AppState>) -> Result<Vec<TaskLogEntry>, S
     Ok(state.logs.lock().await.recent())
 }
 
+/// 返回本地任务历史摘要给 Tauri 前端。
 #[tauri::command]
 pub async fn get_task_history(state: State<'_, AppState>) -> Result<Vec<TaskHistoryJob>, String> {
     get_task_history_for_state(&state)
 }
 
+/// 返回指定任务的历史状态事件给 Tauri 前端。
 #[tauri::command]
 pub async fn get_task_history_events(
     job_id: String,
@@ -154,11 +159,13 @@ pub async fn get_task_history_events(
     get_task_history_events_for_state(&job_id, &state)
 }
 
+/// 清空本地任务日志和任务历史。
 #[tauri::command]
 pub async fn clear_task_history(state: State<'_, AppState>) -> Result<(), String> {
     clear_task_history_for_state(&state).await
 }
 
+/// 通过 AppState 读取任务历史摘要，便于测试绕过 Tauri State。
 pub(crate) fn get_task_history_for_state(state: &AppState) -> Result<Vec<TaskHistoryJob>, String> {
     let Some(store) = &state.task_history else {
         return Ok(Vec::new());
@@ -166,6 +173,7 @@ pub(crate) fn get_task_history_for_state(state: &AppState) -> Result<Vec<TaskHis
     store.recent_jobs(500).map_err(|error| error.to_string())
 }
 
+/// 通过 AppState 读取指定任务事件，便于测试绕过 Tauri State。
 pub(crate) fn get_task_history_events_for_state(
     job_id: &str,
     state: &AppState,
@@ -178,6 +186,7 @@ pub(crate) fn get_task_history_events_for_state(
         .map_err(|error| error.to_string())
 }
 
+/// 通过 AppState 清空任务历史，便于测试绕过 Tauri State。
 pub(crate) async fn clear_task_history_for_state(state: &AppState) -> Result<(), String> {
     state.logs.lock().await.clear();
 

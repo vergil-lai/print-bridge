@@ -5,11 +5,13 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
+/// 本地任务历史 SQLite 存储。
 #[derive(Debug)]
 pub struct TaskHistoryStore {
     conn: Mutex<Connection>,
 }
 
+/// 本地任务历史记录中的任务状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskHistoryStatus {
@@ -23,6 +25,7 @@ pub enum TaskHistoryStatus {
     Cancelled,
 }
 
+/// 本地任务历史记录中的任务来源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskHistorySource {
@@ -31,6 +34,7 @@ pub enum TaskHistorySource {
     Test,
 }
 
+/// 任务历史列表中的单个任务摘要。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskHistoryJob {
     pub job_id: String,
@@ -47,6 +51,7 @@ pub struct TaskHistoryJob {
     pub finished_at: Option<String>,
 }
 
+/// 任务历史中的单个状态事件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskHistoryEvent {
     pub id: i64,
@@ -56,6 +61,7 @@ pub struct TaskHistoryEvent {
     pub occurred_at: String,
 }
 
+/// 写入任务历史时使用的新事件输入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewTaskHistoryEvent<'a> {
     pub job_id: &'a str,
@@ -71,11 +77,13 @@ pub struct NewTaskHistoryEvent<'a> {
 }
 
 impl TaskHistoryStore {
+    /// 打开或创建磁盘上的任务历史数据库。
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         Self::from_connection(conn)
     }
 
+    /// 打开仅用于测试或临时运行的内存任务历史数据库。
     pub fn open_in_memory() -> rusqlite::Result<Self> {
         Self::from_connection(Connection::open_in_memory()?)
     }
@@ -92,6 +100,7 @@ impl TaskHistoryStore {
         self.conn.lock().map_err(|_| rusqlite::Error::InvalidQuery)
     }
 
+    /// 记录任务状态事件，并同步更新任务摘要。
     pub fn record_event(&self, event: &NewTaskHistoryEvent<'_>) -> rusqlite::Result<()> {
         let mut conn = self.lock_conn()?;
         let transaction = conn.transaction()?;
@@ -147,6 +156,7 @@ impl TaskHistoryStore {
         transaction.commit()
     }
 
+    /// 按更新时间倒序读取最近任务摘要。
     pub fn recent_jobs(&self, limit: u32) -> rusqlite::Result<Vec<TaskHistoryJob>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
@@ -162,6 +172,7 @@ impl TaskHistoryStore {
         rows.collect()
     }
 
+    /// 读取指定任务的所有状态事件。
     pub fn events_for_job(&self, job_id: &str) -> rusqlite::Result<Vec<TaskHistoryEvent>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
@@ -175,6 +186,7 @@ impl TaskHistoryStore {
         rows.collect()
     }
 
+    /// 清空本地任务历史。
     pub fn clear(&self) -> rusqlite::Result<()> {
         let mut conn = self.lock_conn()?;
         let transaction = conn.transaction()?;
@@ -254,6 +266,7 @@ impl TaskHistoryStore {
 }
 
 impl TaskHistoryStatus {
+    /// 返回写入数据库和 JSON 时使用的状态字符串。
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
@@ -290,6 +303,7 @@ impl TaskHistoryStatus {
 }
 
 impl TaskHistorySource {
+    /// 返回写入数据库和 JSON 时使用的来源字符串。
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WebSocket => "web_socket",

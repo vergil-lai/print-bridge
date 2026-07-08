@@ -41,6 +41,7 @@ pub enum DocumentError {
     Image(#[from] image::ImageError),
 }
 
+/// 文档检测和 PDF 生成的统一返回结果。
 pub type DocumentResult<T> = Result<T, DocumentError>;
 
 /// 根据文件开头字节检测文档格式。

@@ -12,6 +12,7 @@ pub struct CupsPrintBackend {
     platform: CupsPlatform,
 }
 
+/// CUPS 后端当前运行的平台差异。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CupsPlatform {
     Macos,
@@ -20,12 +21,14 @@ pub enum CupsPlatform {
 }
 
 impl CupsPrintBackend {
+    /// 创建 macOS CUPS 打印后端。
     pub fn macos() -> Self {
         Self {
             platform: CupsPlatform::Macos,
         }
     }
 
+    /// 创建 Linux CUPS 打印后端。
     #[cfg(any(target_os = "linux", test))]
     pub fn linux() -> Self {
         Self {

@@ -12,6 +12,7 @@ export interface AgentConfig {
   };
   security: {
     allowed_origins: string[];
+    allowed_ips: string[];
   };
   printing: {
     default_printer: string | null;
@@ -107,6 +108,7 @@ export interface TaskHistoryEvent {
 export interface ExportConfigOptions {
   service_port: boolean;
   allowed_origins: boolean;
+  allowed_ips: boolean;
   remote_enabled: boolean;
   remote_endpoint_url: boolean;
   remote_bearer_token: boolean;

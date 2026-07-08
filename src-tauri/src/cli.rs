@@ -8,8 +8,10 @@ use clap::{error::ErrorKind, Args, CommandFactory, Parser, Subcommand};
 use std::{fmt, io};
 use url::Url;
 
+/// CLI 命令执行统一返回结果。
 pub type CliResult<T> = Result<T, CliError>;
 
+/// CLI 命令执行后的标准输出、错误输出和退出码。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliOutput {
     pub stdout: String,
@@ -27,6 +29,7 @@ impl CliOutput {
     }
 }
 
+/// CLI 参数解析、配置读取和打印操作返回的错误。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliError {
     Help(String),
@@ -151,6 +154,7 @@ enum TaskCommand {
     Clear,
 }
 
+/// 使用传入参数执行 CLI，便于测试和桌面入口复用。
 pub fn run_cli_from<I, S>(args: I) -> CliResult<CliOutput>
 where
     I: IntoIterator<Item = S>,
@@ -185,6 +189,7 @@ where
     }
 }
 
+/// 从当前进程参数执行 CLI 并返回进程退出码。
 pub fn run_cli_from_env() -> i32 {
     match run_cli_from(std::env::args().skip(1)) {
         Ok(output) => {

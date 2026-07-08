@@ -101,6 +101,7 @@ pub enum PrintError {
     UnsupportedPlatform,
 }
 
+/// 平台打印后端统一返回结果。
 pub type PrintResult<T> = Result<T, PrintError>;
 
 /// 队列 worker 和 HTTP API 使用的平台抽象。
