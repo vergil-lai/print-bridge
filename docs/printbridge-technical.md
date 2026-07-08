@@ -2,8 +2,6 @@
 
 [English](./printbridge-technical_en.md)
 
-这份文档承接 `README.md` 中偏技术的内容，面向需要接入、调试、开发或部署 PrintBridge 的人。
-
 ## 技术栈
 
 | 层级        | 技术                                                                                 |
@@ -15,7 +13,7 @@
 | 后端        | Rust + [Axum](https://docs.rs/axum/latest/axum/) + [Tokio](https://tokio.rs/)        |
 | 存储        | JSON配置文件 + [SQLite](https://www.sqlite.org/)                                     |
 | Office 转换 | [office2pdf](https://docs.rs/office2pdf/latest/office2pdf/)                          |
-| 平台打印    | [SumatraPDF](https://www.sumatrapdfreader.org/) + CUPS `lp`                          |
+| 平台打印    | [SumatraPDF](https://www.sumatrapdfreader.org/)(Windows) / CUPS `lp` (macOS/Linux)   |
 
 ## 产品边界
 

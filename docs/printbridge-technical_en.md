@@ -2,20 +2,18 @@
 
 [中文](./printbridge-technical.md)
 
-This document contains the technical details that are intentionally kept out of the main `README_en.md`. It is for developers and operators who need to integrate, debug, develop, or deploy PrintBridge.
-
 ## Tech Stack
 
-| Layer | Technology |
-| --- | --- |
-| Framework | [Tauri 2](https://v2.tauri.app/) |
-| Frontend | [Vue 3](https://vuejs.org/) + [TypeScript](https://www.typescriptlang.org/) |
-| UI | [shadcn-vue](https://www.shadcn-vue.com/) + [Tailwind CSS](https://tailwindcss.com/) |
-| Build | [Vite](https://vite.dev/) |
-| Backend | Rust + [Axum](https://docs.rs/axum/latest/axum/) + [Tokio](https://tokio.rs/) |
-| Storage | JSON config file + [SQLite](https://www.sqlite.org/) |
-| Office conversion | [office2pdf](https://docs.rs/office2pdf/latest/office2pdf/) |
-| Platform printing | [SumatraPDF](https://www.sumatrapdfreader.org/) + CUPS `lp` |
+| Layer             | Technology                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| Framework         | [Tauri 2](https://v2.tauri.app/)                                                     |
+| Frontend          | [Vue 3](https://vuejs.org/) + [TypeScript](https://www.typescriptlang.org/)          |
+| UI                | [shadcn-vue](https://www.shadcn-vue.com/) + [Tailwind CSS](https://tailwindcss.com/) |
+| Build             | [Vite](https://vite.dev/)                                                            |
+| Backend           | Rust + [Axum](https://docs.rs/axum/latest/axum/) + [Tokio](https://tokio.rs/)        |
+| Storage           | JSON config file + [SQLite](https://www.sqlite.org/)                                 |
+| Office conversion | [office2pdf](https://docs.rs/office2pdf/latest/office2pdf/)                          |
+| Platform printing | [SumatraPDF](https://www.sumatrapdfreader.org/)(Windows) / CUPS `lp` (macOS/Linux)   |
 
 ## Product Boundaries
 
