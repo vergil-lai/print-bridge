@@ -20,5 +20,5 @@ src-tauri/resources/windows/SumatraPDF.exe
 - ZIP SHA-256: `98b33a518d42986856d225064b0cd2d3643ecf78cbf84ab873d26cc51877a544`
 - EXE SHA-256: `719f689b34f47be8ca105ce8484948474dafde0e106bab599e4a89326070c3d0`
 
-SumatraPDF is not covered by this project's MIT license. Its own license terms
-apply when redistributing binaries that include it.
+SumatraPDF is not covered by this project's Apache License 2.0. Its own license
+terms apply when redistributing binaries that include it.
