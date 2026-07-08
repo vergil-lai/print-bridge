@@ -101,6 +101,10 @@ const DEFAULT_REMOTE_CONFIG: AgentConfig['remote'] = {
 
 const GITHUB_REPOSITORY_URL = 'https://github.com/vergil-lai/print-bridge';
 const GITHUB_RELEASES_URL = 'https://github.com/vergil-lai/print-bridge/releases';
+const MIN_SERVICE_PORT = 10000;
+const MAX_SERVICE_PORT = 65535;
+const MIN_REMOTE_POLL_INTERVAL_SECONDS = 3;
+const MIN_REMOTE_MAX_REPORT_RETRIES = 1;
 const THEME_STORAGE_KEY = 'printbridge.theme';
 type ThemeMode = 'system' | 'light' | 'dark';
 
@@ -133,6 +137,7 @@ const exportPassword = ref('');
 const importPassword = ref('');
 const importPath = ref('');
 const importPreview = ref<ImportPreview | null>(null);
+const importErrorMessage = ref('');
 const exportOptions = ref<ExportConfigOptions>(defaultExportOptions());
 const testingPrint = ref(false);
 const testingRemote = ref(false);
@@ -344,8 +349,8 @@ function matchingPaper(paper: EffectivePaper): PaperInfo | undefined {
 function setPort(value: string | number): void {
   if (!config.value) return;
   const port = Number(value);
-  if (Number.isInteger(port) && port > 0 && port <= 65535) {
-    config.value.service.port = port;
+  if (Number.isInteger(port)) {
+    config.value.service.port = Math.min(MAX_SERVICE_PORT, Math.max(MIN_SERVICE_PORT, port));
   }
 }
 
@@ -374,8 +379,12 @@ function setRemoteNumber(
 ): void {
   if (!config.value) return;
   const nextValue = Number(value);
-  if (Number.isInteger(nextValue) && nextValue > 0) {
-    config.value.remote[key] = nextValue;
+  if (Number.isInteger(nextValue)) {
+    const minValue =
+      key === 'poll_interval_seconds'
+        ? MIN_REMOTE_POLL_INTERVAL_SECONDS
+        : MIN_REMOTE_MAX_REPORT_RETRIES;
+    config.value.remote[key] = Math.max(minValue, nextValue);
   }
 }
 
@@ -435,7 +444,13 @@ function openImportDialog(): void {
   importPassword.value = '';
   importPath.value = '';
   importPreview.value = null;
+  importErrorMessage.value = '';
   showImportDialog.value = true;
+}
+
+function resetImportPreview(): void {
+  importPreview.value = null;
+  importErrorMessage.value = '';
 }
 
 async function chooseImportFile(): Promise<void> {
@@ -445,13 +460,14 @@ async function chooseImportFile(): Promise<void> {
   });
   if (typeof path === 'string') {
     importPath.value = path;
-    importPreview.value = null;
+    resetImportPreview();
   }
 }
 
 async function handlePreviewConfigImport(): Promise<void> {
   if (!importPath.value) return;
   previewingConfigImport.value = true;
+  importErrorMessage.value = '';
   errorMessage.value = '';
   successMessage.value = '';
 
@@ -459,7 +475,7 @@ async function handlePreviewConfigImport(): Promise<void> {
     importPreview.value = await previewConfigImport(importPath.value, importPassword.value);
   } catch (error) {
     importPreview.value = null;
-    errorMessage.value = error instanceof Error ? error.message : '导入预览失败';
+    importErrorMessage.value = error instanceof Error ? error.message : '导入预览失败';
   } finally {
     previewingConfigImport.value = false;
   }
@@ -468,6 +484,7 @@ async function handlePreviewConfigImport(): Promise<void> {
 async function handleImportConfig(): Promise<void> {
   if (!importPath.value || !importPreview.value) return;
   importingConfig.value = true;
+  importErrorMessage.value = '';
   errorMessage.value = '';
   successMessage.value = '';
 
@@ -478,7 +495,7 @@ async function handleImportConfig(): Promise<void> {
     showImportDialog.value = false;
     successMessage.value = '配置已导入';
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '导入配置失败';
+    importErrorMessage.value = error instanceof Error ? error.message : '导入配置失败';
   } finally {
     importingConfig.value = false;
   }
@@ -910,47 +927,12 @@ onBeforeUnmount(() => {
 <template>
   <main class="min-h-screen bg-muted/30 px-4 py-4 text-foreground md:px-6">
     <div class="mx-auto flex w-full max-w-5xl flex-col gap-4">
-      <header
-        class="flex flex-col gap-3 border-b bg-background/80 pb-4 md:flex-row md:items-center md:justify-between"
-      >
+      <header class="flex flex-col gap-3 border-b bg-background/80 pb-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 class="text-xl font-semibold tracking-normal">PrintBridge</h1>
           <p class="text-sm text-muted-foreground">本地端口 {{ servicePort || '-' }}</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <div
-            class="grid grid-cols-3 gap-1 rounded-lg border bg-muted/40 p-1"
-            role="group"
-            aria-label="界面主题"
-          >
-            <button
-              type="button"
-              :class="themeOptionClass('light')"
-              :aria-pressed="themeMode === 'light'"
-              @click="setThemeMode('light')"
-            >
-              <Sun class="size-4" />
-              <span>浅色</span>
-            </button>
-            <button
-              type="button"
-              :class="themeOptionClass('dark')"
-              :aria-pressed="themeMode === 'dark'"
-              @click="setThemeMode('dark')"
-            >
-              <Moon class="size-4" />
-              <span>深色</span>
-            </button>
-            <button
-              type="button"
-              :class="themeOptionClass('system')"
-              :aria-pressed="themeMode === 'system'"
-              @click="setThemeMode('system')"
-            >
-              <Monitor class="size-4" />
-              <span>跟随系统</span>
-            </button>
-          </div>
           <Badge :variant="statusVariant">
             {{ statusLabel }}
           </Badge>
@@ -958,19 +940,11 @@ onBeforeUnmount(() => {
             <Save class="size-4" />
             {{ saving ? '保存中' : '保存' }}
           </Button>
-          <Button
-            variant="outline"
-            :disabled="!config || exportingConfig"
-            @click="openExportDialog"
-          >
+          <Button variant="outline" :disabled="!config || exportingConfig" @click="openExportDialog">
             <FileDown class="size-4" />
             导出配置
           </Button>
-          <Button
-            variant="outline"
-            :disabled="!config || importingConfig"
-            @click="openImportDialog"
-          >
+          <Button variant="outline" :disabled="!config || importingConfig" @click="openImportDialog">
             <FileUp class="size-4" />
             导入配置
           </Button>
@@ -978,39 +952,23 @@ onBeforeUnmount(() => {
       </header>
 
       <div v-if="errorMessage || successMessage" class="grid gap-2 text-sm">
-        <Alert
-          v-if="errorMessage"
-          variant="error"
-          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
-        >
+        <Alert v-if="errorMessage" variant="error" class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
           <AlertDescription class="min-w-0 break-words">
             {{ errorMessage }}
           </AlertDescription>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            class="shrink-0 text-destructive hover:bg-destructive/15 hover:text-destructive"
-            aria-label="关闭错误提示"
-            @click="dismissMessage('error')"
-          >
+          <Button variant="ghost" size="icon-sm"
+            class="shrink-0 text-destructive hover:bg-destructive/15 hover:text-destructive" aria-label="关闭错误提示"
+            @click="dismissMessage('error')">
             <X class="size-4" />
           </Button>
         </Alert>
-        <Alert
-          v-if="successMessage"
-          variant="success"
-          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
-        >
+        <Alert v-if="successMessage" variant="success" class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
           <AlertDescription class="min-w-0 break-words">
             {{ successMessage }}
           </AlertDescription>
-          <Button
-            variant="ghost"
-            size="icon-sm"
+          <Button variant="ghost" size="icon-sm"
             class="shrink-0 text-emerald-800 hover:bg-emerald-500/15 hover:text-emerald-900 dark:text-emerald-200 dark:hover:text-emerald-100"
-            aria-label="关闭成功提示"
-            @click="dismissMessage('success')"
-          >
+            aria-label="关闭成功提示" @click="dismissMessage('success')">
             <X class="size-4" />
           </Button>
         </Alert>
@@ -1040,95 +998,65 @@ onBeforeUnmount(() => {
               <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
                 <div class="grid gap-2">
                   <Label for="default-printer">默认打印机</Label>
-                  <Select
-                    :model-value="selectedPrinter"
-                    @update:model-value="handlePrinterChange(String($event))"
-                  >
+                  <Select :model-value="selectedPrinter" @update:model-value="handlePrinterChange(String($event))">
                     <SelectTrigger id="default-printer" class="w-full">
                       <SelectValue placeholder="选择打印机" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem
-                        v-for="printer in printers"
-                        :key="printer.name"
-                        :value="printer.name"
-                      >
+                      <SelectItem v-for="printer in printers" :key="printer.name" :value="printer.name">
                         {{ printer.name }}{{ printer.is_default ? '（系统默认）' : '' }}
                       </SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                <Button
-                  class="whitespace-nowrap"
-                  variant="outline"
-                  :disabled="loadingPrinters"
-                  @click="refreshPrinters"
-                >
+                <Button class="whitespace-nowrap" variant="outline" :disabled="loadingPrinters"
+                  @click="refreshPrinters">
                   <RefreshCw class="size-4" :class="{ 'animate-spin': loadingPrinters }" />
                   刷新
                 </Button>
-                <Button
-                  class="whitespace-nowrap"
-                  variant="outline"
-                  :disabled="!canTestPrint || testingPrint"
-                  @click="handleTestPrint"
-                >
+                <Button class="whitespace-nowrap" variant="outline" :disabled="!canTestPrint || testingPrint"
+                  @click="handleTestPrint">
                   <Printer class="size-4" />
                   {{ testingPrint ? '提交中' : '测试打印' }}
                 </Button>
               </div>
 
-              <div class="grid gap-2">
-                <Label for="default-paper">默认纸张</Label>
-                <Select
-                  :model-value="selectedPaper"
-                  @update:model-value="selectedPaper = String($event)"
-                >
-                  <SelectTrigger id="default-paper" class="w-full">
-                    <SelectValue placeholder="选择纸张" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="custom"> 自定义尺寸 </SelectItem>
-                    <SelectItem v-for="paper in papers" :key="paper.id" :value="paper.id">
-                      {{ formatPaperLabel(paper) }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p class="text-xs text-muted-foreground">
-                  {{
-                    loadingPapers
-                      ? '正在读取纸张列表'
-                      : papers.length
-                        ? '可选择驱动纸张，也可直接编辑尺寸'
-                        : '未读取到纸张列表，可直接编辑默认尺寸'
-                  }}
-                </p>
-              </div>
-
-              <div class="grid gap-4 md:grid-cols-2">
+              <div
+                class="grid items-start gap-4 md:grid-cols-[minmax(0,1.35fr)_minmax(140px,0.45fr)_minmax(140px,0.45fr)]"
+              >
+                <div class="grid gap-2">
+                  <Label for="default-paper">默认纸张</Label>
+                  <Select :model-value="selectedPaper" @update:model-value="selectedPaper = String($event)">
+                    <SelectTrigger id="default-paper" class="w-full">
+                      <SelectValue placeholder="选择纸张" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="custom"> 自定义尺寸 </SelectItem>
+                      <SelectItem v-for="paper in papers" :key="paper.id" :value="paper.id">
+                        {{ formatPaperLabel(paper) }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p class="text-xs text-muted-foreground">
+                    {{
+                      loadingPapers
+                        ? '正在读取纸张列表'
+                        : papers.length
+                          ? '可选择驱动纸张，也可直接编辑尺寸'
+                          : '未读取到纸张列表，可直接编辑默认尺寸'
+                    }}
+                  </p>
+                </div>
                 <div class="grid gap-2">
                   <Label for="paper-width">宽度（mm）</Label>
-                  <Input
-                    id="paper-width"
-                    type="number"
-                    min="1"
-                    step="0.1"
+                  <Input id="paper-width" type="number" min="1" step="0.1"
                     :model-value="config.printing.default_paper?.width_mm ?? DEFAULT_PAPER.width_mm"
-                    @update:model-value="setPaperDimension('width_mm', $event)"
-                  />
+                    @update:model-value="setPaperDimension('width_mm', $event)" />
                 </div>
                 <div class="grid gap-2">
                   <Label for="paper-height">高度（mm）</Label>
-                  <Input
-                    id="paper-height"
-                    type="number"
-                    min="1"
-                    step="0.1"
-                    :model-value="
-                      config.printing.default_paper?.height_mm ?? DEFAULT_PAPER.height_mm
-                    "
-                    @update:model-value="setPaperDimension('height_mm', $event)"
-                  />
+                  <Input id="paper-height" type="number" min="1" step="0.1" :model-value="config.printing.default_paper?.height_mm ?? DEFAULT_PAPER.height_mm
+                    " @update:model-value="setPaperDimension('height_mm', $event)" />
                 </div>
               </div>
 
@@ -1137,24 +1065,59 @@ onBeforeUnmount(() => {
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
                   <Label for="service-port">本地端口</Label>
-                  <Input
-                    id="service-port"
-                    type="number"
-                    min="1"
-                    max="65535"
-                    :model-value="config.service.port"
-                    @update:model-value="setPort"
-                  />
+                  <Input id="service-port" type="number" :min="MIN_SERVICE_PORT" :max="MAX_SERVICE_PORT" :model-value="config.service.port"
+                    @update:model-value="setPort" />
                   <p v-if="hasPendingPortChange" class="text-xs text-muted-foreground">
                     当前会话仍连接 {{ activePort }}，保存后将重启应用生效。
                   </p>
                 </div>
-                <div class="flex items-center justify-between rounded-md border px-3 py-2">
-                  <div class="grid gap-1">
-                    <Label for="autostart">开机自启</Label>
+                <div class="grid gap-2">
+                  <Label for="autostart">开机自启</Label>
+                  <div class="flex min-h-10 items-center justify-between gap-3">
                     <p class="text-xs text-muted-foreground">启动系统后自动运行 PrintBridge</p>
+                    <Switch id="autostart" v-model="config.app.autostart" />
                   </div>
-                  <Switch id="autostart" v-model="config.app.autostart" />
+                </div>
+              </div>
+
+              <Separator />
+
+              <div
+                class="flex flex-col gap-3 rounded-md border px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <Label>界面主题</Label>
+                <div
+                  class="grid w-full grid-cols-3 gap-1 rounded-lg border bg-muted/40 p-1 sm:w-auto"
+                  role="group"
+                  aria-label="界面主题"
+                >
+                  <button
+                    type="button"
+                    :class="themeOptionClass('light')"
+                    :aria-pressed="themeMode === 'light'"
+                    @click="setThemeMode('light')"
+                  >
+                    <Sun class="size-4" />
+                    <span>浅色</span>
+                  </button>
+                  <button
+                    type="button"
+                    :class="themeOptionClass('dark')"
+                    :aria-pressed="themeMode === 'dark'"
+                    @click="setThemeMode('dark')"
+                  >
+                    <Moon class="size-4" />
+                    <span>深色</span>
+                  </button>
+                  <button
+                    type="button"
+                    :class="themeOptionClass('system')"
+                    :aria-pressed="themeMode === 'system'"
+                    @click="setThemeMode('system')"
+                  >
+                    <Monitor class="size-4" />
+                    <span>跟随系统</span>
+                  </button>
                 </div>
               </div>
             </CardContent>
@@ -1173,20 +1136,12 @@ onBeforeUnmount(() => {
               <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <div class="grid min-w-0 gap-2">
                   <Label for="remote-url">任务 URL</Label>
-                  <Input
-                    id="remote-url"
-                    type="url"
-                    placeholder="https://api.example.com/print-task"
+                  <Input id="remote-url" type="url" placeholder="https://api.example.com/print-task"
                     :model-value="config.remote.endpoint_url ?? ''"
-                    @update:model-value="setRemoteString('endpoint_url', $event)"
-                  />
+                    @update:model-value="setRemoteString('endpoint_url', $event)" />
                 </div>
-                <Button
-                  class="whitespace-nowrap"
-                  variant="outline"
-                  :disabled="!config.remote.enabled || testingRemote"
-                  @click="handleTestRemoteConnection"
-                >
+                <Button class="whitespace-nowrap" variant="outline" :disabled="!config.remote.enabled || testingRemote"
+                  @click="handleTestRemoteConnection">
                   <RefreshCw class="size-4" :class="{ 'animate-spin': testingRemote }" />
                   {{ testingRemote ? '测试中' : '测试连接' }}
                 </Button>
@@ -1194,31 +1149,18 @@ onBeforeUnmount(() => {
 
               <div class="grid gap-2">
                 <Label for="remote-token">Authorization Bearer Token</Label>
-                <Input
-                  id="remote-token"
-                  type="password"
-                  autocomplete="off"
+                <Input id="remote-token" type="password" autocomplete="off"
                   :model-value="config.remote.bearer_token ?? ''"
-                  @update:model-value="setRemoteString('bearer_token', $event)"
-                />
+                  @update:model-value="setRemoteString('bearer_token', $event)" />
               </div>
 
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
                   <Label for="remote-device-id">Device ID</Label>
                   <div class="flex gap-2">
-                    <Input
-                      id="remote-device-id"
-                      class="min-w-0 flex-1"
-                      :model-value="config.remote.device_id ?? ''"
-                      @update:model-value="setRemoteString('device_id', $event)"
-                    />
-                    <Button
-                      class="whitespace-nowrap"
-                      variant="outline"
-                      type="button"
-                      @click="generateRemoteDeviceId"
-                    >
+                    <Input id="remote-device-id" class="min-w-0 flex-1" :model-value="config.remote.device_id ?? ''"
+                      @update:model-value="setRemoteString('device_id', $event)" />
+                    <Button class="whitespace-nowrap" variant="outline" type="button" @click="generateRemoteDeviceId">
                       <Shuffle class="size-4" />
                       随机生成
                     </Button>
@@ -1226,34 +1168,22 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="grid gap-2">
                   <Label for="remote-device-name">Device Name</Label>
-                  <Input
-                    id="remote-device-name"
-                    :model-value="config.remote.device_name ?? ''"
-                    @update:model-value="setRemoteString('device_name', $event)"
-                  />
+                  <Input id="remote-device-name" :model-value="config.remote.device_name ?? ''"
+                    @update:model-value="setRemoteString('device_name', $event)" />
                 </div>
               </div>
 
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
                   <Label for="remote-poll-interval">轮询时间（秒）</Label>
-                  <Input
-                    id="remote-poll-interval"
-                    type="number"
-                    min="1"
+                  <Input id="remote-poll-interval" type="number" :min="MIN_REMOTE_POLL_INTERVAL_SECONDS"
                     :model-value="config.remote.poll_interval_seconds"
-                    @update:model-value="setRemoteNumber('poll_interval_seconds', $event)"
-                  />
+                    @update:model-value="setRemoteNumber('poll_interval_seconds', $event)" />
                 </div>
                 <div class="grid gap-2">
                   <Label for="remote-max-retries">上报重试次数</Label>
-                  <Input
-                    id="remote-max-retries"
-                    type="number"
-                    min="1"
-                    :model-value="config.remote.max_report_retries"
-                    @update:model-value="setRemoteNumber('max_report_retries', $event)"
-                  />
+                  <Input id="remote-max-retries" type="number" :min="MIN_REMOTE_MAX_REPORT_RETRIES" :model-value="config.remote.max_report_retries"
+                    @update:model-value="setRemoteNumber('max_report_retries', $event)" />
                 </div>
               </div>
             </CardContent>
@@ -1268,12 +1198,8 @@ onBeforeUnmount(() => {
             <CardContent class="grid gap-4">
               <form class="flex items-start gap-2" @submit.prevent="addOrigin">
                 <div class="grid flex-1 gap-1">
-                  <Input
-                    v-model="originDraft"
-                    placeholder="https://example.com"
-                    autocomplete="off"
-                    :aria-invalid="originErrorMessage ? 'true' : 'false'"
-                  />
+                  <Input v-model="originDraft" placeholder="https://example.com" autocomplete="off"
+                    :aria-invalid="originErrorMessage ? 'true' : 'false'" />
                   <p v-if="originErrorMessage" class="text-xs text-destructive">
                     {{ originErrorMessage }}
                   </p>
@@ -1281,25 +1207,15 @@ onBeforeUnmount(() => {
                 <Button type="submit"> 添加 </Button>
               </form>
               <div class="grid gap-2">
-                <div
-                  v-for="origin in config.security.allowed_origins"
-                  :key="origin"
-                  class="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
-                >
+                <div v-for="origin in config.security.allowed_origins" :key="origin"
+                  class="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                   <span class="truncate">{{ origin }}</span>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="删除 Origin"
-                    @click="removeOrigin(origin)"
-                  >
+                  <Button variant="ghost" size="icon-sm" aria-label="删除 Origin" @click="removeOrigin(origin)">
                     <Trash2 class="size-4" />
                   </Button>
                 </div>
-                <p
-                  v-if="config.security.allowed_origins.length === 0"
-                  class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground"
-                >
+                <p v-if="config.security.allowed_origins.length === 0"
+                  class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
                   暂无白名单 Origin
                 </p>
               </div>
@@ -1337,43 +1253,29 @@ onBeforeUnmount(() => {
                       <ExternalLink class="size-4" />
                       更新日志
                     </Button>
-                    <Button
-                      variant="outline"
-                      :disabled="checkingUpdate || installingUpdate"
-                      @click="checkForUpdate"
-                    >
+                    <Button variant="outline" :disabled="checkingUpdate || installingUpdate" @click="checkForUpdate">
                       <RefreshCw class="size-4" :class="{ 'animate-spin': checkingUpdate }" />
                       {{ checkingUpdate ? '检查中' : '检查更新' }}
                     </Button>
-                    <Button
-                      v-if="availableUpdate && updateStatus !== 'installed'"
-                      :disabled="installingUpdate"
-                      @click="installAvailableUpdate"
-                    >
+                    <Button v-if="availableUpdate && updateStatus !== 'installed'" :disabled="installingUpdate"
+                      @click="installAvailableUpdate">
                       <Download class="size-4" />
                       {{ updateButtonLabel }}
                     </Button>
-                    <Button
-                      v-if="updateStatus === 'installed'"
-                      variant="outline"
-                      @click="restartAfterUpdate"
-                    >
+                    <Button v-if="updateStatus === 'installed'" variant="outline" @click="restartAfterUpdate">
                       <RotateCw class="size-4" />
                       重启应用
                     </Button>
                   </div>
                 </div>
 
-                <div
-                  class="rounded-md border px-4 py-3 text-sm"
-                  :class="{
-                    'border-primary/40 bg-primary/10 text-primary': updateStatus === 'available',
-                    'border-destructive/30 bg-destructive/10 text-destructive':
-                      updateStatus === 'error',
-                    'bg-muted/40 text-muted-foreground':
-                      updateStatus !== 'available' && updateStatus !== 'error',
-                  }"
-                >
+                <div class="rounded-md border px-4 py-3 text-sm" :class="{
+                  'border-primary/40 bg-primary/10 text-primary': updateStatus === 'available',
+                  'border-destructive/30 bg-destructive/10 text-destructive':
+                    updateStatus === 'error',
+                  'bg-muted/40 text-muted-foreground':
+                    updateStatus !== 'available' && updateStatus !== 'error',
+                }">
                   <span v-if="updateStatus === 'available'">
                     检测到新版本：{{ availableUpdateVersion }}
                   </span>
@@ -1383,10 +1285,8 @@ onBeforeUnmount(() => {
 
                 <div v-if="installingUpdate" class="grid gap-2">
                   <div class="h-2 overflow-hidden rounded-full bg-muted">
-                    <div
-                      class="h-full rounded-full bg-primary transition-all"
-                      :style="{ width: `${updateProgressPercent}%` }"
-                    />
+                    <div class="h-full rounded-full bg-primary transition-all"
+                      :style="{ width: `${updateProgressPercent}%` }" />
                   </div>
                   <p class="text-xs text-muted-foreground">
                     {{ updateProgressText }}
@@ -1396,8 +1296,7 @@ onBeforeUnmount(() => {
                 <div v-if="updateInfo?.body" class="grid gap-2">
                   <Label>更新说明</Label>
                   <div
-                    class="max-h-36 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/20 px-3 py-2 text-sm"
-                  >
+                    class="max-h-36 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/20 px-3 py-2 text-sm">
                     {{ updateInfo.body }}
                   </div>
                 </div>
@@ -1411,21 +1310,14 @@ onBeforeUnmount(() => {
             <CardHeader class="flex flex-row items-center justify-between pb-3">
               <CardTitle class="text-base"> 打印任务 </CardTitle>
               <div class="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="loadingTaskHistory || clearingTaskHistory"
-                  @click="refreshTaskHistory"
-                >
+                <Button variant="outline" size="sm" :disabled="loadingTaskHistory || clearingTaskHistory"
+                  @click="refreshTaskHistory">
                   <RefreshCw class="size-4" :class="{ 'animate-spin': loadingTaskHistory }" />
                   刷新
                 </Button>
-                <Button
-                  :variant="confirmingClearTaskHistory ? 'destructive' : 'outline'"
-                  size="sm"
+                <Button :variant="confirmingClearTaskHistory ? 'destructive' : 'outline'" size="sm"
                   :disabled="loadingTaskHistory || clearingTaskHistory || taskHistory.length === 0"
-                  @click="handleClearTaskHistory"
-                >
+                  @click="handleClearTaskHistory">
                   <Trash2 class="size-4" />
                   {{ confirmingClearTaskHistory ? '确认清空' : '清空' }}
                 </Button>
@@ -1448,14 +1340,8 @@ onBeforeUnmount(() => {
                     <TableEmpty v-if="taskHistory.length === 0" :colspan="6">
                       {{ loadingTaskHistory ? '正在加载任务...' : '暂无任务' }}
                     </TableEmpty>
-                    <TableRow
-                      v-for="entry in taskHistory"
-                      v-else
-                      :key="entry.job_id"
-                      class="cursor-pointer"
-                      :class="{ 'bg-muted/60': selectedTaskJobId === entry.job_id }"
-                      @click="selectTask(entry.job_id)"
-                    >
+                    <TableRow v-for="entry in taskHistory" v-else :key="entry.job_id" class="cursor-pointer"
+                      :class="{ 'bg-muted/60': selectedTaskJobId === entry.job_id }" @click="selectTask(entry.job_id)">
                       <TableCell class="whitespace-nowrap text-muted-foreground">
                         {{ formatDateTime(entry.updated_at) }}
                       </TableCell>
@@ -1498,24 +1384,15 @@ onBeforeUnmount(() => {
                   <div v-if="!selectedTaskJobId" class="px-3 py-8 text-sm text-muted-foreground">
                     暂无选中任务
                   </div>
-                  <div
-                    v-else-if="loadingTaskEvents"
-                    class="px-3 py-8 text-sm text-muted-foreground"
-                  >
+                  <div v-else-if="loadingTaskEvents" class="px-3 py-8 text-sm text-muted-foreground">
                     正在加载状态...
                   </div>
-                  <div
-                    v-else-if="selectedTaskEvents.length === 0"
-                    class="px-3 py-8 text-sm text-muted-foreground"
-                  >
+                  <div v-else-if="selectedTaskEvents.length === 0" class="px-3 py-8 text-sm text-muted-foreground">
                     暂无状态记录
                   </div>
                   <div v-else class="grid gap-3 p-3">
-                    <div
-                      v-for="event in selectedTaskEvents"
-                      :key="event.id"
-                      class="grid min-w-0 gap-1 border-l-2 border-muted-foreground/30 pl-3"
-                    >
+                    <div v-for="event in selectedTaskEvents" :key="event.id"
+                      class="grid min-w-0 gap-1 border-l-2 border-muted-foreground/30 pl-3">
                       <div class="flex flex-wrap items-center gap-2">
                         <Badge variant="outline">
                           {{ taskStatusLabel(event.status) }}
@@ -1536,10 +1413,8 @@ onBeforeUnmount(() => {
         </TabsContent>
       </Tabs>
 
-      <div
-        v-if="showExportDialog"
-        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
-      >
+      <div v-if="showExportDialog"
+        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm">
         <Card class="w-full max-w-lg">
           <CardHeader class="pb-3">
             <CardTitle class="text-base">导出配置</CardTitle>
@@ -1588,19 +1463,11 @@ onBeforeUnmount(() => {
             </Alert>
 
             <div class="flex flex-wrap justify-end gap-2">
-              <Button
-                variant="outline"
-                :disabled="exportingConfig"
-                @click="showExportDialog = false"
-              >
+              <Button variant="outline" :disabled="exportingConfig" @click="showExportDialog = false">
                 取消
               </Button>
-              <Button
-                v-if="showEmptyPasswordTokenConfirm"
-                variant="outline"
-                :disabled="exportingConfig"
-                @click="confirmEmptyPasswordExport"
-              >
+              <Button v-if="showEmptyPasswordTokenConfirm" variant="outline" :disabled="exportingConfig"
+                @click="confirmEmptyPasswordExport">
                 确认空密码导出
               </Button>
               <Button :disabled="exportingConfig" @click="handleExportConfig">
@@ -1611,83 +1478,71 @@ onBeforeUnmount(() => {
         </Card>
       </div>
 
-      <div
-        v-if="showImportDialog"
-        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
-      >
-        <Card class="w-full max-w-xl">
-          <CardHeader class="pb-3">
-            <CardTitle class="text-base">导入配置</CardTitle>
-          </CardHeader>
-          <CardContent class="grid gap-4">
-            <div class="grid gap-2">
-              <Label for="import-path">配置文件</Label>
-              <div class="flex gap-2">
-                <Input id="import-path" class="min-w-0 flex-1" :model-value="importPath" readonly />
-                <Button
-                  variant="outline"
-                  :disabled="previewingConfigImport"
-                  @click="chooseImportFile"
-                >
-                  选择
-                </Button>
+      <div v-if="showImportDialog"
+        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm">
+        <div class="flex max-h-full w-full items-center justify-center">
+          <Card class="flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col">
+            <CardHeader class="shrink-0 pb-3">
+              <CardTitle class="text-base">导入配置</CardTitle>
+            </CardHeader>
+            <CardContent class="flex min-h-0 flex-1 flex-col gap-4">
+              <div class="grid gap-2">
+                <Label for="import-path">配置文件</Label>
+                <div class="flex gap-2">
+                  <Input id="import-path" class="min-w-0 flex-1" :model-value="importPath" readonly />
+                  <Button variant="outline" :disabled="previewingConfigImport" @click="chooseImportFile">
+                    选择
+                  </Button>
+                </div>
               </div>
-            </div>
 
-            <div class="grid gap-2">
-              <Label for="import-password">密码</Label>
-              <Input
-                id="import-password"
-                v-model="importPassword"
-                type="password"
-                @update:model-value="importPreview = null"
-              />
-            </div>
-
-            <div v-if="importPreview" class="grid gap-2 rounded-md border bg-muted/20 p-3">
-              <div class="text-sm font-medium">导入变更</div>
-              <div v-if="importPreview.items.length === 0" class="text-sm text-muted-foreground">
-                没有可导入的变更
+              <div class="grid gap-2">
+                <Label for="import-password">密码</Label>
+                <Input id="import-password" v-model="importPassword" type="password"
+                  @update:model-value="resetImportPreview" />
               </div>
-              <div v-else class="grid gap-2">
-                <div v-for="item in importPreview.items" :key="item.key" class="grid gap-1 text-sm">
-                  <div class="font-medium">{{ item.label }}</div>
-                  <div class="break-words text-muted-foreground">
-                    {{ item.current }} -> {{ item.next }}
+
+              <Alert v-if="importErrorMessage" variant="error">
+                <AlertDescription class="min-w-0 break-words">
+                  {{ importErrorMessage }}
+                </AlertDescription>
+              </Alert>
+
+              <div v-if="importPreview" class="flex min-h-0 flex-col gap-2 rounded-md border bg-muted/20 p-3">
+                <div class="shrink-0 text-sm font-medium">导入变更</div>
+                <div v-if="importPreview.items.length === 0" class="text-sm text-muted-foreground">
+                  没有可导入的变更
+                </div>
+                <div v-else class="grid max-h-[35vh] min-h-0 gap-2 overflow-y-auto pr-1">
+                  <div v-for="item in importPreview.items" :key="item.key" class="grid gap-1 text-sm">
+                    <div class="font-medium">{{ item.label }}</div>
+                    <div class="break-words text-muted-foreground">
+                      {{ item.current }} -> {{ item.next }}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div class="flex flex-wrap justify-end gap-2">
-              <Button
-                variant="outline"
-                :disabled="previewingConfigImport || importingConfig"
-                @click="showImportDialog = false"
-              >
-                取消
-              </Button>
-              <Button
-                variant="outline"
-                :disabled="!importPath || previewingConfigImport || importingConfig"
-                @click="handlePreviewConfigImport"
-              >
-                {{ previewingConfigImport ? '预览中' : '预览' }}
-              </Button>
-              <Button
-                :disabled="
-                  !importPreview ||
+              <div class="flex shrink-0 flex-wrap justify-end gap-2">
+                <Button variant="outline" :disabled="previewingConfigImport || importingConfig"
+                  @click="showImportDialog = false">
+                  取消
+                </Button>
+                <Button variant="outline" :disabled="!importPath || previewingConfigImport || importingConfig"
+                  @click="handlePreviewConfigImport">
+                  {{ previewingConfigImport ? '预览中' : '预览' }}
+                </Button>
+                <Button :disabled="!importPreview ||
                   importPreview.items.length === 0 ||
                   previewingConfigImport ||
                   importingConfig
-                "
-                @click="handleImportConfig"
-              >
-                {{ importingConfig ? '导入中' : '确认导入' }}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+                  " @click="handleImportConfig">
+                  {{ importingConfig ? '导入中' : '确认导入' }}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   </main>

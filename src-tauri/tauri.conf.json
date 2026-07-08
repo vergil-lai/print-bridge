@@ -16,6 +16,7 @@
         "title": "PrintBridge",
         "width": 960,
         "height": 680,
+        "maximizable": false,
         "visible": false
       }
     ],

@@ -1,6 +1,6 @@
 use crate::{
     app_state::AppState,
-    config::AgentConfig,
+    config::{AgentConfig, MAX_SERVICE_PORT, MIN_SERVICE_PORT},
     config_transfer::{
         build_transfer_payload, decrypt_payload, encrypt_payload, merge_payload, preview_payload,
         read_encrypted_file_with_hash, write_encrypted_file, ExportConfigOptions, ImportPreview,
@@ -10,7 +10,7 @@ use crate::{
     task_history::{TaskHistoryEvent, TaskHistoryJob},
     test_print::print_calibration_page_with_config,
 };
-use std::path::PathBuf;
+use std::{net::TcpListener, path::PathBuf};
 use tauri::State;
 use tauri_plugin_autostart::ManagerExt;
 
@@ -33,6 +33,11 @@ pub async fn save_config(
     config: AgentConfig,
     state: State<'_, AppState>,
 ) -> Result<AgentConfig, String> {
+    let current_port = state.config.read().await.service.port;
+    if config.service.port != current_port {
+        check_service_port_available_for_host("0.0.0.0", config.service.port)?;
+    }
+
     apply_autostart(&app, config.app.autostart)?;
     save_config_for_state(config, &state).await
 }
@@ -118,6 +123,18 @@ fn apply_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> 
     .map_err(|error| error.to_string())
 }
 
+fn check_service_port_available_for_host(host: &str, port: u16) -> Result<(), String> {
+    if !(MIN_SERVICE_PORT..=MAX_SERVICE_PORT).contains(&port) {
+        return Err(format!(
+            "本地端口必须在 {MIN_SERVICE_PORT} 到 {MAX_SERVICE_PORT} 之间"
+        ));
+    }
+
+    TcpListener::bind((host, port))
+        .map(drop)
+        .map_err(|_| format!("本地端口 {port} 已被占用，请换一个端口"))
+}
+
 /// 返回最近任务日志给 Tauri 前端。
 #[tauri::command]
 pub async fn get_logs(state: State<'_, AppState>) -> Result<Vec<TaskLogEntry>, String> {
@@ -181,8 +198,9 @@ pub async fn print_test(config: AgentConfig, state: State<'_, AppState>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{
-        clear_task_history_for_state, get_task_history_events_for_state,
-        get_task_history_for_state, save_config_for_state,
+        check_service_port_available_for_host, clear_task_history_for_state,
+        get_task_history_events_for_state, get_task_history_for_state, save_config_for_state,
+        MAX_SERVICE_PORT, MIN_SERVICE_PORT,
     };
     use crate::{
         app_state::AppState,
@@ -254,6 +272,27 @@ mod tests {
         assert!(!path.exists());
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn check_service_port_available_rejects_occupied_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let error = check_service_port_available_for_host("127.0.0.1", port).unwrap_err();
+
+        assert_eq!(error, format!("本地端口 {port} 已被占用，请换一个端口"));
+    }
+
+    #[test]
+    fn check_service_port_available_rejects_ports_below_minimum() {
+        let error =
+            check_service_port_available_for_host("127.0.0.1", MIN_SERVICE_PORT - 1).unwrap_err();
+
+        assert_eq!(
+            error,
+            format!("本地端口必须在 {MIN_SERVICE_PORT} 到 {MAX_SERVICE_PORT} 之间")
+        );
     }
 
     #[tokio::test]

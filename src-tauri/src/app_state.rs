@@ -1,5 +1,5 @@
 use crate::{
-    config::AgentConfig,
+    config::{AgentConfig, MIN_REMOTE_MAX_REPORT_RETRIES, MIN_REMOTE_POLL_INTERVAL_SECONDS},
     logs::LogStore,
     logs::TaskLogEntry,
     printing::{default_backend, PrintBackend},
@@ -98,6 +98,18 @@ impl AppState {
             validate_origin(origin)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         }
+        if config.remote.poll_interval_seconds < MIN_REMOTE_POLL_INTERVAL_SECONDS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("轮询时间必须大于等于 {MIN_REMOTE_POLL_INTERVAL_SECONDS} 秒"),
+            ));
+        }
+        if config.remote.max_report_retries < MIN_REMOTE_MAX_REPORT_RETRIES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("上报重试次数必须大于等于 {MIN_REMOTE_MAX_REPORT_RETRIES}"),
+            ));
+        }
 
         if let Some(path) = &self.config_path {
             config.save(path)?;
@@ -116,5 +128,22 @@ impl AppState {
     /// 向活跃订阅者广播状态事件。
     pub fn broadcast_status(&self, entry: TaskLogEntry) {
         let _ = self.status_events.send(entry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AgentConfig, MIN_REMOTE_POLL_INTERVAL_SECONDS};
+
+    #[tokio::test]
+    async fn save_config_rejects_remote_poll_interval_below_minimum() {
+        let state = AppState::new(AgentConfig::default());
+        let mut config = AgentConfig::default();
+        config.remote.poll_interval_seconds = MIN_REMOTE_POLL_INTERVAL_SECONDS - 1;
+
+        let error = state.save_config(config).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }

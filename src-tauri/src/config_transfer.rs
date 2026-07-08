@@ -1,4 +1,4 @@
-use crate::config::AgentConfig;
+use crate::config::{AgentConfig, MIN_REMOTE_POLL_INTERVAL_SECONDS};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
@@ -378,10 +378,10 @@ pub fn merge_payload(
         }
 
         if let Some(seconds) = remote.poll_interval_seconds {
-            if seconds == 0 {
-                return Err(ConfigTransferError::InvalidField(
-                    "轮询时间必须大于等于 1 秒".to_string(),
-                ));
+            if seconds < MIN_REMOTE_POLL_INTERVAL_SECONDS {
+                return Err(ConfigTransferError::InvalidField(format!(
+                    "轮询时间必须大于等于 {MIN_REMOTE_POLL_INTERVAL_SECONDS} 秒"
+                )));
             }
             next.remote.poll_interval_seconds = seconds;
         }
@@ -850,7 +850,7 @@ mod tests {
             .remote
             .as_mut()
             .unwrap()
-            .poll_interval_seconds = Some(0);
+            .poll_interval_seconds = Some(MIN_REMOTE_POLL_INTERVAL_SECONDS - 1);
         assert!(matches!(
             merge_payload(&current, &invalid_poll).unwrap_err(),
             ConfigTransferError::InvalidField(_)

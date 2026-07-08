@@ -11,7 +11,11 @@ pub const TASK_HISTORY_FILE_NAME: &str = "task_history.sqlite3";
 pub const CONFIG_PATH_OVERRIDE_ENV: &str = "PRINT_BRIDGE_CONFIG_PATH";
 pub const DATA_DIR_OVERRIDE_ENV: &str = "PRINT_BRIDGE_DATA_DIR";
 
+pub const MIN_SERVICE_PORT: u16 = 10000;
+pub const MAX_SERVICE_PORT: u16 = u16::MAX;
 pub const DEFAULT_PORT: u16 = 17890;
+pub const MIN_REMOTE_POLL_INTERVAL_SECONDS: u64 = 3;
+pub const MIN_REMOTE_MAX_REPORT_RETRIES: u32 = 1;
 
 pub fn cli_config_path() -> Result<PathBuf, io::Error> {
     if let Some(path) = env::var_os(CONFIG_PATH_OVERRIDE_ENV) {
