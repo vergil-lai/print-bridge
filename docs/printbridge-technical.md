@@ -1,5 +1,7 @@
 # PrintBridge 技术说明
 
+[English](./printbridge-technical_en.md)
+
 这份文档承接 `README.md` 中偏技术的内容，面向需要接入、调试、开发或部署 PrintBridge 的人。
 
 ## 技术栈

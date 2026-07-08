@@ -1,0 +1,148 @@
+# PrintBridge
+
+[中文](./README.md)
+
+PrintBridge is a local print agent that runs on the user's computer. It lets trusted web pages or remote business servers send PDF files, images, Office files, and raw printer commands to the local system print queue. It is designed for labels, shipping documents, receipts, reports, and other business scenarios that need reliable silent printing.
+
+PrintBridge does not replace printer drivers and does not bypass the operating system print queue. It receives print tasks, validates the source, downloads or converts files when needed, and submits jobs to the local operating system. The actual output is still handled by the system print queue, printer driver, and printer hardware.
+
+## Use Cases
+
+- Keep a local print agent running on warehouse, store, or workstation computers
+- Print directly from Web ERP, WMS, OMS, or POS systems
+- Reduce manual printer selection for labels, shipping documents, picking lists, and receipts
+- Let a business server create print tasks while local agents poll tasks and report status
+
+## Features
+
+- Runs in the system tray and hides the main window by default
+- Supports Windows, macOS, and Linux, with Linux daemon and Docker support planned
+- Local HTTP/WebSocket service
+- Website allowlist (Origin allowlist) to control which web pages may connect, for example `https://example.com`
+- IP allowlist to control which client addresses may access the local service, with single IP and CIDR support
+- Supports PDF, PNG/JPEG images, and Office(.docx/.xlsx/.pptx) files
+- Supports raw printer commands and submits ESC/POS, TSPL, ZPL, EPL, PCL, and similar device commands as-is
+- Allows each task to specify a printer; falls back to the configured default printer when omitted
+- Uses a serial print queue to avoid concurrent jobs competing for the same printer
+- Remote task polling for workstations, stores, and warehouse terminals
+- CLI operations mode for viewing and updating local configuration without opening the GUI
+- Printer discovery, paper discovery, persistent configuration, and recent task history
+- Encrypted configuration export/import for workstation rollout
+- Online updates
+
+## Remote Task Polling
+
+PrintBridge can run as a local agent on a workstation, store terminal, or warehouse computer. It periodically polls a business server for print tasks and reports execution status back to the server.
+
+This is useful when the business system creates tasks and expects a specific local terminal to print them automatically, such as production labels, shipping labels, picking lists, and receipts.
+
+## Raw Printer Commands
+
+PrintBridge supports raw printer commands. Your business system can generate ESC/POS, TSPL, ZPL, EPL, PCL, PostScript, or other device commands, and PrintBridge will submit the bytes to the system print queue as-is.
+
+This is useful for label printers, receipt printers, and industrial printing devices. PrintBridge does not parse these device languages and does not generate labels, receipts, or RFID commands for you.
+
+## Difference From Traditional Web Printing Controls
+
+PrintBridge is not a traditional Web printing control. Products such as [C-Lodop / Lodop](https://www.lodop.net/) are better suited for print design, form printing, tables, barcodes, and printing page content. PrintBridge focuses on being an open-source local print agent for remote task polling, raw printer commands, CLI operations, and private integration.
+
+If your business system already generates PDF files, images, Office files, or device commands such as ESC/POS, TSPL, ZPL, EPL, and PCL, PrintBridge acts as a stable, auditable, and customizable bridge to the local print queue.
+
+## Screenshots
+
+<p>
+  <img src="screenshots/1.png" alt="Screenshot 1" width="49%">
+  <img src="screenshots/2.png" alt="Screenshot 2" width="49%">
+</p>
+
+<p>
+  <img src="screenshots/3.png" alt="Screenshot 3" width="49%">
+  <img src="screenshots/4.png" alt="Screenshot 4" width="49%">
+</p>
+
+<p>
+  <img src="screenshots/5.png" alt="Screenshot 5" width="49%">
+  <img src="screenshots/6.png" alt="Screenshot 6" width="49%">
+</p>
+
+## Installation
+
+Download the latest version from [Releases](https://github.com/vergil-lai/print-bridge/releases).
+
+After first launch, configure PrintBridge in the settings UI:
+
+1. Select the default printer
+2. Select or enter the default paper size
+3. Add your business system Origin to the website allowlist, for example `https://example.com`
+4. Keep the default IP allowlist entry `127.0.0.1`; if LAN devices need to connect, add explicit IPs or CIDR ranges such as `192.168.1.10` or `192.168.1.0/24`
+5. If remote task polling is required, enter the task URL in the Remote tab and enable it
+
+## CLI Mode
+
+PrintBridge provides a `print-bridge` CLI for basic operations and diagnostics without opening the GUI:
+
+```bash
+print-bridge printer
+print-bridge printer set-default "Printer Name"
+
+print-bridge paper
+print-bridge paper set 60 40
+
+print-bridge origin add "https://example.com"
+
+print-bridge remote enable
+print-bridge remote set-url "https://example.com/print-task"
+
+print-bridge task
+```
+
+The CLI reads and writes the same local configuration as the GUI and can inspect local task history. See the [technical documentation](docs/printbridge-technical_en.md#cli-operations) for the full command list.
+
+## Integration
+
+For browser-side integration, use [`print-bridge-sdk`](https://github.com/vergil-lai/print-bridge-jssdk). The SDK connects to the local agent through WebSocket and wraps printing, batch printing, heartbeat, and task status events.
+
+PrintBridge also supports remote task polling. A business server can maintain pending print tasks while the local agent periodically pulls tasks, submits them to the system print queue, and reports `accepted`, `success`, or `failed` back to the server.
+
+## How It Works
+
+```text
+Web page / remote business server
+  |
+  | WebSocket task submission, or HTTP remote task polling
+  v
+PrintBridge
+  |
+  | Validate source, download files, convert formats, enter serial queue
+  v
+System print queue
+  |
+  v
+Printer driver and printer
+```
+
+The WebSocket `submitted` status and remote `success` report mean that the job has been submitted to the system print queue. They do not mean that the printer has physically finished printing.
+
+## Security Boundary
+
+PrintBridge runs on the user's local computer and can access local printers. At minimum, deployments should follow these rules:
+
+- Add only trusted business systems to the website allowlist; this validates the browser page Origin
+- Add only trusted client IPs or CIDR ranges to the IP allowlist; the default `127.0.0.1` entry cannot be removed
+- Even when the local service listens on LAN addresses, do not expose the service port to untrusted networks
+- Control who can create print tasks and which files can be printed on the business-system side
+- Do not expose sensitive file URLs to untrusted pages
+
+## Technical Documentation
+
+For protocol details, APIs, configuration format, development commands, and platform notes, see:
+
+- [Technical documentation](docs/printbridge-technical_en.md)
+- [Remote task server examples](examples/remote-task/README.md)
+- [JS SDK](https://github.com/vergil-lai/print-bridge-jssdk)
+
+## License
+
+[Apache License 2.0](./LICENSE).
+
+The Windows build bundles SumatraPDF, which is covered by its own license. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
