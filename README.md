@@ -126,6 +126,70 @@ https://example.com
 
 白名单只校验发起连接的网页来源，不校验被打印文件 URL 的域名。
 
+## 配置导出与导入
+
+设置界面支持把部分配置导出为加密 JSON 文件，也可以从加密 JSON 文件导入配置。导出文件默认名为：
+
+```text
+printbridge-config.json
+```
+
+导出时可以勾选以下配置项，默认全部选中：
+
+- 本地端口
+- Origin 白名单列表
+- 远程任务开关
+- 远程任务 URL
+- 远程任务 Authorization Token
+- 轮询时间
+- 上报重试次数
+
+导出时需要填写密码，密码可以留空；留空时仍然会按同一套加密流程生成文件。如果勾选了 Authorization Token 且密码为空，界面会要求二次确认。
+
+导入时需要选择配置文件并输入导出时使用的密码。导入会先展示预览，确认后只覆盖文件中包含的配置项；文件中没有包含的配置会保留现有值。
+
+Authorization Token 有额外保护规则：导入文件中 token 字段缺失、为 `null` 或为空字符串时，都会保留当前 token；只有非空字符串才会覆盖当前 token。
+
+加密文件是普通 JSON 外壳，内部配置 payload 使用 Argon2id v1.3 和 AES-256-GCM 加密：
+
+```json
+{
+  "format": "printbridge-config-encrypted",
+  "version": 1,
+  "crypto": {
+    "kdf": "argon2id13",
+    "memory_kib": 19456,
+    "iterations": 2,
+    "parallelism": 1,
+    "cipher": "aes-256-gcm",
+    "tag_bytes": 16,
+    "salt": "<base64>",
+    "nonce": "<base64>"
+  },
+  "payload": "<base64(ciphertext || tag)>"
+}
+```
+
+解密后的 payload 格式为：
+
+```json
+{
+  "format": "printbridge-config",
+  "version": 1,
+  "config": {
+    "service": {
+      "port": 17890
+    }
+  }
+}
+```
+
+ERP 或其他系统如果需要生成可导入配置，可以参考 `examples/config-transfer/` 下的 PHP、Go 和 Node 实现。根目录提供统一验证命令：
+
+```bash
+pnpm verify:config-transfer-examples
+```
+
 ## HTTP API
 
 HTTP API 主要供桌面设置界面和诊断使用。
