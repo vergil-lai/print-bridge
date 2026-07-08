@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   AgentConfig,
+  ExportConfigOptions,
+  ImportPreview,
   PaperInfo,
   PrinterInfo,
   TaskHistoryEvent,
@@ -36,6 +38,29 @@ export function getConfig(): Promise<AgentConfig> {
 /** 通过 Tauri 保存 Agent 配置。 */
 export function saveConfig(config: AgentConfig): Promise<AgentConfig> {
   return invoke<AgentConfig>('save_config', { config });
+}
+
+/** 导出加密配置文件。 */
+export function exportConfigFile(
+  path: string,
+  password: string,
+  options: ExportConfigOptions,
+): Promise<void> {
+  return invoke<void>('export_config_file', { path, password, options });
+}
+
+/** 预览加密配置文件导入后的变更。 */
+export function previewConfigImport(path: string, password: string): Promise<ImportPreview> {
+  return invoke<ImportPreview>('preview_config_import', { path, password });
+}
+
+/** 导入加密配置文件并返回保存后的 Agent 配置。 */
+export function importConfigFile(
+  path: string,
+  password: string,
+  expectedFileHash: string,
+): Promise<AgentConfig> {
+  return invoke<AgentConfig>('import_config_file', { path, password, expectedFileHash });
 }
 
 /** 使用当前远程任务配置执行连接测试。 */

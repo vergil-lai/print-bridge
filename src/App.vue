@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
 import {
   Download,
   ExternalLink,
+  FileDown,
+  FileUp,
   Monitor,
   Moon,
   Printer,
@@ -15,23 +17,29 @@ import {
   X,
 } from '@lucide/vue';
 import { getVersion } from '@tauri-apps/api/app';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import appIcon from '@/assets/app-icon.png';
 import {
+  exportConfigFile,
   fetchPapers,
   fetchPrinters,
   clearTaskHistory,
   getConfig,
   getTaskHistory,
   getTaskHistoryEvents,
+  importConfigFile,
   isDebugBuild,
   printTestPage,
+  previewConfigImport,
   saveConfig,
   testRemoteConnection,
 } from '@/api';
 import type {
   AgentConfig,
   EffectivePaper,
+  ExportConfigOptions,
+  ImportPreview,
   PaperInfo,
   PrinterInfo,
   TaskHistoryEvent,
@@ -115,6 +123,17 @@ const loadingTaskEvents = ref(false);
 const clearingTaskHistory = ref(false);
 const confirmingClearTaskHistory = ref(false);
 const saving = ref(false);
+const exportingConfig = ref(false);
+const importingConfig = ref(false);
+const previewingConfigImport = ref(false);
+const showExportDialog = ref(false);
+const showImportDialog = ref(false);
+const showEmptyPasswordTokenConfirm = ref(false);
+const exportPassword = ref('');
+const importPassword = ref('');
+const importPath = ref('');
+const importPreview = ref<ImportPreview | null>(null);
+const exportOptions = ref<ExportConfigOptions>(defaultExportOptions());
 const testingPrint = ref(false);
 const testingRemote = ref(false);
 const activePort = ref<number | null>(null);
@@ -227,6 +246,18 @@ function normalizeConfig(value: AgentConfig): AgentConfig {
       ...DEFAULT_REMOTE_CONFIG,
       ...value.remote,
     },
+  };
+}
+
+function defaultExportOptions(): ExportConfigOptions {
+  return {
+    service_port: true,
+    allowed_origins: true,
+    remote_enabled: true,
+    remote_endpoint_url: true,
+    remote_bearer_token: true,
+    remote_poll_interval_seconds: true,
+    remote_max_report_retries: true,
   };
 }
 
@@ -354,6 +385,102 @@ function dismissMessage(kind: 'error' | 'success'): void {
     errorMessage.value = '';
   } else {
     successMessage.value = '';
+  }
+}
+
+function openExportDialog(): void {
+  exportOptions.value = defaultExportOptions();
+  exportPassword.value = '';
+  showEmptyPasswordTokenConfirm.value = false;
+  showExportDialog.value = true;
+}
+
+async function handleExportConfig(): Promise<void> {
+  if (exportOptions.value.remote_bearer_token && exportPassword.value.length === 0) {
+    showEmptyPasswordTokenConfirm.value = true;
+    return;
+  }
+
+  await runExportConfig();
+}
+
+async function confirmEmptyPasswordExport(): Promise<void> {
+  showEmptyPasswordTokenConfirm.value = false;
+  await runExportConfig();
+}
+
+async function runExportConfig(): Promise<void> {
+  exportingConfig.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    const path = await saveDialog({
+      defaultPath: 'printbridge-config.json',
+      filters: [{ name: 'PrintBridge Config', extensions: ['json'] }],
+    });
+    if (!path) return;
+
+    await exportConfigFile(path, exportPassword.value, exportOptions.value);
+    showExportDialog.value = false;
+    successMessage.value = '配置已导出';
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '导出配置失败';
+  } finally {
+    exportingConfig.value = false;
+  }
+}
+
+function openImportDialog(): void {
+  importPassword.value = '';
+  importPath.value = '';
+  importPreview.value = null;
+  showImportDialog.value = true;
+}
+
+async function chooseImportFile(): Promise<void> {
+  const path = await openDialog({
+    multiple: false,
+    filters: [{ name: 'PrintBridge Config', extensions: ['json'] }],
+  });
+  if (typeof path === 'string') {
+    importPath.value = path;
+    importPreview.value = null;
+  }
+}
+
+async function handlePreviewConfigImport(): Promise<void> {
+  if (!importPath.value) return;
+  previewingConfigImport.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    importPreview.value = await previewConfigImport(importPath.value, importPassword.value);
+  } catch (error) {
+    importPreview.value = null;
+    errorMessage.value = error instanceof Error ? error.message : '导入预览失败';
+  } finally {
+    previewingConfigImport.value = false;
+  }
+}
+
+async function handleImportConfig(): Promise<void> {
+  if (!importPath.value || !importPreview.value) return;
+  importingConfig.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    config.value = normalizeConfig(
+      await importConfigFile(importPath.value, importPassword.value, importPreview.value.file_hash),
+    );
+    showImportDialog.value = false;
+    successMessage.value = '配置已导入';
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '导入配置失败';
+  } finally {
+    importingConfig.value = false;
   }
 }
 
@@ -830,6 +957,22 @@ onBeforeUnmount(() => {
           <Button :disabled="!config || saving" @click="persistConfig">
             <Save class="size-4" />
             {{ saving ? '保存中' : '保存' }}
+          </Button>
+          <Button
+            variant="outline"
+            :disabled="!config || exportingConfig"
+            @click="openExportDialog"
+          >
+            <FileDown class="size-4" />
+            导出配置
+          </Button>
+          <Button
+            variant="outline"
+            :disabled="!config || importingConfig"
+            @click="openImportDialog"
+          >
+            <FileUp class="size-4" />
+            导入配置
           </Button>
         </div>
       </header>
@@ -1392,6 +1535,160 @@ onBeforeUnmount(() => {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <div
+        v-if="showExportDialog"
+        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
+      >
+        <Card class="w-full max-w-lg">
+          <CardHeader class="pb-3">
+            <CardTitle class="text-base">导出配置</CardTitle>
+          </CardHeader>
+          <CardContent class="grid gap-4">
+            <div class="grid gap-3">
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="exportOptions.service_port" type="checkbox" />
+                本地端口
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="exportOptions.allowed_origins" type="checkbox" />
+                Origin 白名单列表
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="exportOptions.remote_enabled" type="checkbox" />
+                远程任务开关
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="exportOptions.remote_endpoint_url" type="checkbox" />
+                远程任务 URL
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="exportOptions.remote_bearer_token" type="checkbox" />
+                远程任务 Authorization Token
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="exportOptions.remote_poll_interval_seconds" type="checkbox" />
+                轮询时间
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="exportOptions.remote_max_report_retries" type="checkbox" />
+                上报重试次数
+              </label>
+            </div>
+
+            <div class="grid gap-2">
+              <Label for="export-password">密码</Label>
+              <Input id="export-password" v-model="exportPassword" type="password" />
+            </div>
+
+            <Alert v-if="showEmptyPasswordTokenConfirm" variant="warning">
+              <AlertDescription>
+                已选择导出 Authorization Token，且密码为空。确认后仍会导出加密文件。
+              </AlertDescription>
+            </Alert>
+
+            <div class="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                :disabled="exportingConfig"
+                @click="showExportDialog = false"
+              >
+                取消
+              </Button>
+              <Button
+                v-if="showEmptyPasswordTokenConfirm"
+                variant="outline"
+                :disabled="exportingConfig"
+                @click="confirmEmptyPasswordExport"
+              >
+                确认空密码导出
+              </Button>
+              <Button :disabled="exportingConfig" @click="handleExportConfig">
+                {{ exportingConfig ? '导出中' : '导出' }}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div
+        v-if="showImportDialog"
+        class="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
+      >
+        <Card class="w-full max-w-xl">
+          <CardHeader class="pb-3">
+            <CardTitle class="text-base">导入配置</CardTitle>
+          </CardHeader>
+          <CardContent class="grid gap-4">
+            <div class="grid gap-2">
+              <Label for="import-path">配置文件</Label>
+              <div class="flex gap-2">
+                <Input id="import-path" class="min-w-0 flex-1" :model-value="importPath" readonly />
+                <Button
+                  variant="outline"
+                  :disabled="previewingConfigImport"
+                  @click="chooseImportFile"
+                >
+                  选择
+                </Button>
+              </div>
+            </div>
+
+            <div class="grid gap-2">
+              <Label for="import-password">密码</Label>
+              <Input
+                id="import-password"
+                v-model="importPassword"
+                type="password"
+                @update:model-value="importPreview = null"
+              />
+            </div>
+
+            <div v-if="importPreview" class="grid gap-2 rounded-md border bg-muted/20 p-3">
+              <div class="text-sm font-medium">导入变更</div>
+              <div v-if="importPreview.items.length === 0" class="text-sm text-muted-foreground">
+                没有可导入的变更
+              </div>
+              <div v-else class="grid gap-2">
+                <div v-for="item in importPreview.items" :key="item.key" class="grid gap-1 text-sm">
+                  <div class="font-medium">{{ item.label }}</div>
+                  <div class="break-words text-muted-foreground">
+                    {{ item.current }} -> {{ item.next }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                :disabled="previewingConfigImport || importingConfig"
+                @click="showImportDialog = false"
+              >
+                取消
+              </Button>
+              <Button
+                variant="outline"
+                :disabled="!importPath || previewingConfigImport || importingConfig"
+                @click="handlePreviewConfigImport"
+              >
+                {{ previewingConfigImport ? '预览中' : '预览' }}
+              </Button>
+              <Button
+                :disabled="
+                  !importPreview ||
+                  importPreview.items.length === 0 ||
+                  previewingConfigImport ||
+                  importingConfig
+                "
+                @click="handleImportConfig"
+              >
+                {{ importingConfig ? '导入中' : '确认导入' }}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   </main>
 </template>

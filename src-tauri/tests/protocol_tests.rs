@@ -26,9 +26,18 @@ fn supported_format_accepts_pdf_image_and_legacy_image_subtypes() {
         SupportedFormat::from_str("jpeg").unwrap(),
         SupportedFormat::Jpeg
     );
-
-    assert!(SupportedFormat::from_str("docx").is_err());
-    assert!(SupportedFormat::from_str("xlsx").is_err());
+    assert_eq!(
+        SupportedFormat::from_str("docx").unwrap(),
+        SupportedFormat::Docx
+    );
+    assert_eq!(
+        SupportedFormat::from_str("xlsx").unwrap(),
+        SupportedFormat::Xlsx
+    );
+    assert_eq!(
+        SupportedFormat::from_str("pptx").unwrap(),
+        SupportedFormat::Pptx
+    );
 }
 
 #[test]

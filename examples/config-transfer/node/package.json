@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node config-transfer.mjs verify"
+  },
+  "dependencies": {
+    "libsodium-wrappers-sumo": "^0.7.15"
+  }
+}

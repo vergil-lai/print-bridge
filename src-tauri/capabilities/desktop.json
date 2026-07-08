@@ -10,6 +10,7 @@
   ],
   "permissions": [
     "autostart:default",
+    "dialog:default",
     "log:default",
     "opener:default",
     "updater:default",

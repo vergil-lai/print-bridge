@@ -1,6 +1,7 @@
 pub mod app_state;
 pub mod commands;
 pub mod config;
+pub mod config_transfer;
 pub mod document;
 pub mod download;
 pub mod logs;
@@ -30,6 +31,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -83,6 +85,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
+            commands::export_config_file,
+            commands::preview_config_import,
+            commands::import_config_file,
             commands::test_remote_connection,
             commands::get_logs,
             commands::get_task_history,

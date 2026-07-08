@@ -103,3 +103,25 @@ export interface TaskHistoryEvent {
   message: string | null;
   occurred_at: string;
 }
+
+export interface ExportConfigOptions {
+  service_port: boolean;
+  allowed_origins: boolean;
+  remote_enabled: boolean;
+  remote_endpoint_url: boolean;
+  remote_bearer_token: boolean;
+  remote_poll_interval_seconds: boolean;
+  remote_max_report_retries: boolean;
+}
+
+export interface ImportPreviewItem {
+  key: string;
+  label: string;
+  current: string;
+  next: string;
+}
+
+export interface ImportPreview {
+  file_hash: string;
+  items: ImportPreviewItem[];
+}
