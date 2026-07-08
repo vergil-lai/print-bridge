@@ -10,7 +10,6 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-docs
 *.local
 printbridge.key
 AGENTS.md
