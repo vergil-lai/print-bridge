@@ -23,6 +23,7 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 base64 = "0.22.1"
 rand = "0.8"
+clap = { version = "4.5", features = ["derive"] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

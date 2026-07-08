@@ -1,11 +1,37 @@
 use print_bridge_lib::{
     config::{
-        AgentConfig, AppConfig, LimitsConfig, PrintingConfig, RemoteConfig, SecurityConfig,
-        ServiceConfig,
+        cli_config_path, cli_task_history_path, AgentConfig, AppConfig, LimitsConfig,
+        PrintingConfig, RemoteConfig, SecurityConfig, ServiceConfig, CONFIG_PATH_OVERRIDE_ENV,
+        DATA_DIR_OVERRIDE_ENV,
     },
     protocol::EffectivePaper,
 };
 use std::fs;
+use std::sync::Mutex;
+
+static ENV_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+struct EnvVarOverrideGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+impl EnvVarOverrideGuard {
+    fn set_env_var<K: AsRef<std::ffi::OsStr>>(key: &'static str, value: K) -> Self {
+        let original = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarOverrideGuard {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 #[test]
 fn agent_config_defaults_match_grouped_baseline() {
@@ -142,4 +168,31 @@ fn agent_config_load_returns_error_for_invalid_json() {
     assert!(result.is_err());
 
     let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn cli_config_path_uses_explicit_file_override() {
+    let _env_lock = ENV_TEST_MUTEX.lock().unwrap();
+
+    let path = std::env::temp_dir().join(format!(
+        "print-bridge-cli-config-path-{}.json",
+        std::process::id()
+    ));
+    let _override_guard = EnvVarOverrideGuard::set_env_var(CONFIG_PATH_OVERRIDE_ENV, &path);
+
+    let resolved = cli_config_path().unwrap();
+    assert_eq!(resolved, path);
+}
+
+#[test]
+fn cli_task_history_path_uses_data_dir_override() {
+    let _env_lock = ENV_TEST_MUTEX.lock().unwrap();
+
+    let dir =
+        std::env::temp_dir().join(format!("print-bridge-cli-data-dir-{}", std::process::id()));
+    let expected = dir.join("task_history.sqlite3");
+    let _override_guard = EnvVarOverrideGuard::set_env_var(DATA_DIR_OVERRIDE_ENV, &dir);
+
+    let resolved = cli_task_history_path().unwrap();
+    assert_eq!(resolved, expected);
 }

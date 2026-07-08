@@ -6,10 +6,51 @@ use super::{
 };
 use std::{collections::HashMap, io::Write, path::Path, process::Command};
 
-/// 基于 CUPS 命令行工具的 macOS 打印后端。
-pub struct MacosPrintBackend;
+/// 基于 CUPS 命令行工具的打印后端。
+#[derive(Debug, Clone, Copy)]
+pub struct CupsPrintBackend {
+    platform: CupsPlatform,
+}
 
-impl PrintBackend for MacosPrintBackend {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CupsPlatform {
+    Macos,
+    #[cfg(any(target_os = "linux", test))]
+    Linux,
+}
+
+impl CupsPrintBackend {
+    pub fn macos() -> Self {
+        Self {
+            platform: CupsPlatform::Macos,
+        }
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub fn linux() -> Self {
+        Self {
+            platform: CupsPlatform::Linux,
+        }
+    }
+
+    fn backend_name(self) -> &'static str {
+        match self.platform {
+            CupsPlatform::Macos => "macos-cups",
+            #[cfg(any(target_os = "linux", test))]
+            CupsPlatform::Linux => "linux-cups",
+        }
+    }
+
+    fn raw_backend_name(self) -> &'static str {
+        match self.platform {
+            CupsPlatform::Macos => "macos-cups-raw",
+            #[cfg(any(target_os = "linux", test))]
+            CupsPlatform::Linux => "linux-cups-raw",
+        }
+    }
+}
+
+impl PrintBackend for CupsPrintBackend {
     /// 列出 CUPS 目标，并标记当前默认打印机。
     fn list_printers(&self) -> PrintResult<Vec<PrinterInfo>> {
         let printers_output = run_command("lpstat", &["-e"])?;
@@ -76,7 +117,7 @@ impl PrintBackend for MacosPrintBackend {
             let tracking_supported = system_job_id.is_some();
             Ok(PrintSubmission {
                 submitted_at: submitted_at_rfc3339(),
-                backend: "macos-cups".to_string(),
+                backend: self.backend_name().to_string(),
                 system_job_id,
                 tracking_supported,
             })
@@ -110,7 +151,7 @@ impl PrintBackend for MacosPrintBackend {
             let tracking_supported = system_job_id.is_some();
             Ok(PrintSubmission {
                 submitted_at: submitted_at_rfc3339(),
-                backend: "macos-cups-raw".to_string(),
+                backend: self.raw_backend_name().to_string(),
                 system_job_id,
                 tracking_supported,
             })
@@ -528,7 +569,7 @@ fn leading_number(value: &str) -> Option<f64> {
 }
 
 /// 在查询纸张或打印前确保打印机名称存在。
-fn ensure_printer_exists(backend: &MacosPrintBackend, printer_name: &str) -> PrintResult<()> {
+fn ensure_printer_exists(backend: &CupsPrintBackend, printer_name: &str) -> PrintResult<()> {
     if backend
         .list_printers()?
         .iter()
@@ -542,7 +583,7 @@ fn ensure_printer_exists(backend: &MacosPrintBackend, printer_name: &str) -> Pri
 
 /// 根据打印机支持的纸张列表解析请求纸张。
 fn resolve_print_paper(
-    backend: &MacosPrintBackend,
+    backend: &CupsPrintBackend,
     options: &PrintOptions,
 ) -> PrintResult<PaperInfo> {
     let papers = backend.list_papers(&options.printer_name)?;
@@ -593,9 +634,23 @@ mod tests {
     use super::{
         classify_port, completed_jobs_contains_job, parse_default_destination, parse_lp_job_id,
         parse_lpoptions_dpi, parse_lpoptions_media_types, parse_lpoptions_papers,
-        parse_lpoptions_trays, parse_lpstat_destinations, parse_lpstat_devices,
+        parse_lpoptions_trays, parse_lpstat_destinations, parse_lpstat_devices, CupsPrintBackend,
     };
     use std::collections::HashMap;
+
+    #[test]
+    fn backend_names_follow_platform_variant() {
+        assert_eq!(CupsPrintBackend::macos().backend_name(), "macos-cups");
+        assert_eq!(
+            CupsPrintBackend::macos().raw_backend_name(),
+            "macos-cups-raw"
+        );
+        assert_eq!(CupsPrintBackend::linux().backend_name(), "linux-cups");
+        assert_eq!(
+            CupsPrintBackend::linux().raw_backend_name(),
+            "linux-cups-raw"
+        );
+    }
 
     #[test]
     fn parses_lpstat_destinations_and_marks_default_printer() {

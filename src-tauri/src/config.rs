@@ -1,8 +1,68 @@
 use crate::protocol::EffectivePaper;
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::Path};
+use std::{
+    env, fs, io,
+    path::{Path, PathBuf},
+};
+
+pub const APP_CONFIG_DIR_NAME: &str = "com.vergil.printbridge";
+pub const CONFIG_FILE_NAME: &str = "config.json";
+pub const TASK_HISTORY_FILE_NAME: &str = "task_history.sqlite3";
+pub const CONFIG_PATH_OVERRIDE_ENV: &str = "PRINT_BRIDGE_CONFIG_PATH";
+pub const DATA_DIR_OVERRIDE_ENV: &str = "PRINT_BRIDGE_DATA_DIR";
 
 pub const DEFAULT_PORT: u16 = 17890;
+
+pub fn cli_config_path() -> Result<PathBuf, io::Error> {
+    if let Some(path) = env::var_os(CONFIG_PATH_OVERRIDE_ENV) {
+        return Ok(PathBuf::from(path));
+    }
+
+    Ok(cli_config_dir()?.join(CONFIG_FILE_NAME))
+}
+
+pub fn cli_task_history_path() -> Result<PathBuf, io::Error> {
+    if let Some(dir) = env::var_os(DATA_DIR_OVERRIDE_ENV) {
+        return Ok(PathBuf::from(dir).join(TASK_HISTORY_FILE_NAME));
+    }
+
+    Ok(cli_config_dir()?.join(TASK_HISTORY_FILE_NAME))
+}
+
+fn cli_config_dir() -> Result<PathBuf, io::Error> {
+    if let Some(dir) = env::var_os(DATA_DIR_OVERRIDE_ENV) {
+        return Ok(PathBuf::from(dir));
+    }
+
+    platform_config_dir().map(|dir| dir.join(APP_CONFIG_DIR_NAME))
+}
+
+#[cfg(target_os = "windows")]
+fn platform_config_dir() -> Result<PathBuf, io::Error> {
+    env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "APPDATA is not set"))
+}
+
+#[cfg(target_os = "macos")]
+fn platform_config_dir() -> Result<PathBuf, io::Error> {
+    home_dir().map(|home| home.join("Library").join("Application Support"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn platform_config_dir() -> Result<PathBuf, io::Error> {
+    if let Some(dir) = env::var_os("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(dir));
+    }
+
+    home_dir().map(|home| home.join(".config"))
+}
+
+fn home_dir() -> Result<PathBuf, io::Error> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))
+}
 
 /// 本地 PrintBridge Agent 的持久化配置。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

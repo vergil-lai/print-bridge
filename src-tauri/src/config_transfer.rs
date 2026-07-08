@@ -213,9 +213,11 @@ pub fn build_transfer_payload(
     config: &AgentConfig,
     options: &ExportConfigOptions,
 ) -> ConfigTransferPayload {
-    let service = options.service_port.then(|| PartialServiceTransferConfig {
-        port: Some(config.service.port),
-    });
+    let service = options
+        .service_port
+        .then_some(PartialServiceTransferConfig {
+            port: Some(config.service.port),
+        });
 
     let security = options
         .allowed_origins

@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
 
-#[cfg(target_os = "macos")]
-mod macos;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod cups;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -147,7 +147,12 @@ pub trait PrintBackend {
 pub fn default_backend() -> Box<dyn PrintBackend + Send + Sync> {
     #[cfg(target_os = "macos")]
     {
-        Box::new(macos::MacosPrintBackend)
+        Box::new(cups::CupsPrintBackend::macos())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(cups::CupsPrintBackend::linux())
     }
 
     #[cfg(target_os = "windows")]
@@ -155,7 +160,7 @@ pub fn default_backend() -> Box<dyn PrintBackend + Send + Sync> {
         Box::new(windows::WindowsPrintBackend::default())
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         Box::new(UnsupportedPrintBackend)
     }
@@ -169,10 +174,10 @@ pub fn windows_backend(
     Box::new(windows::WindowsPrintBackend::new(sumatra_path))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 struct UnsupportedPrintBackend;
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 impl PrintBackend for UnsupportedPrintBackend {
     /// 报告不支持的平台，而不是返回假的打印机。
     fn list_printers(&self) -> PrintResult<Vec<PrinterInfo>> {
@@ -196,7 +201,7 @@ impl PrintBackend for UnsupportedPrintBackend {
 }
 
 /// 返回当前 UTC RFC3339 时间，用于记录平台提交时间。
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn submitted_at_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)

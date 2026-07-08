@@ -1,4 +1,5 @@
 pub mod app_state;
+pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod config_transfer;
@@ -98,6 +99,10 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+pub fn run_cli_from_env() -> i32 {
+    cli::run_cli_from_env()
 }
 
 /// 选择当前平台的打印后端，并在需要时注入打包资源。
