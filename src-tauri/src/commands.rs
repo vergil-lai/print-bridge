@@ -1,11 +1,16 @@
 use crate::{
     app_state::AppState,
     config::AgentConfig,
+    config_transfer::{
+        build_transfer_payload, decrypt_payload, encrypt_payload, merge_payload, preview_payload,
+        read_encrypted_file_with_hash, write_encrypted_file, ExportConfigOptions, ImportPreview,
+    },
     logs::TaskLogEntry,
     remote_client::RemoteClient,
     task_history::{TaskHistoryEvent, TaskHistoryJob},
     test_print::print_calibration_page_with_config,
 };
+use std::path::PathBuf;
 use tauri::State;
 use tauri_plugin_autostart::ManagerExt;
 
@@ -30,6 +35,52 @@ pub async fn save_config(
 ) -> Result<AgentConfig, String> {
     apply_autostart(&app, config.app.autostart)?;
     save_config_for_state(config, &state).await
+}
+
+#[tauri::command]
+pub async fn export_config_file(
+    path: String,
+    password: String,
+    options: ExportConfigOptions,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let current = state.config.read().await.clone();
+    let payload = build_transfer_payload(&current, &options);
+    let encrypted = encrypt_payload(&payload, &password).map_err(|error| error.to_string())?;
+    write_encrypted_file(&PathBuf::from(path), &encrypted).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn preview_config_import(
+    path: String,
+    password: String,
+    state: State<'_, AppState>,
+) -> Result<ImportPreview, String> {
+    let current = state.config.read().await.clone();
+    let (encrypted, file_hash) =
+        read_encrypted_file_with_hash(&PathBuf::from(path)).map_err(|error| error.to_string())?;
+    let payload = decrypt_payload(&encrypted, &password).map_err(|error| error.to_string())?;
+    let mut preview = preview_payload(&current, &payload).map_err(|error| error.to_string())?;
+    preview.file_hash = file_hash;
+    Ok(preview)
+}
+
+#[tauri::command]
+pub async fn import_config_file(
+    path: String,
+    password: String,
+    expected_file_hash: String,
+    state: State<'_, AppState>,
+) -> Result<AgentConfig, String> {
+    let current = state.config.read().await.clone();
+    let (encrypted, file_hash) =
+        read_encrypted_file_with_hash(&PathBuf::from(path)).map_err(|error| error.to_string())?;
+    if file_hash != expected_file_hash {
+        return Err("配置文件已变化，请重新预览后导入".to_string());
+    }
+    let payload = decrypt_payload(&encrypted, &password).map_err(|error| error.to_string())?;
+    let merged = merge_payload(&current, &payload).map_err(|error| error.to_string())?;
+    save_config_for_state(merged, &state).await
 }
 
 /// 使用远程配置执行 GET/POST 连接测试。
