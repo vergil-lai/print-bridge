@@ -1,6 +1,6 @@
 [package]
 name = "print-bridge"
-version = "0.1.2"
+version = "0.1.3"
 description = "Local printing bridge for trusted Web pages."
 authors = ["Vergil Lai"]
 license = "MIT"
