@@ -114,9 +114,12 @@ print-bridge remote set-interval 10
 print-bridge task
 print-bridge task "JOB-001"
 print-bridge task clear
+print-bridge serve
 ```
 
 The CLI reads and writes the same `config.json` used by the GUI, and reads the local `task_history.sqlite3`. It is useful for macOS/Linux headless machines, server installations, Raspberry Pi deployments, or other environments without a persistent GUI session.
+
+`print-bridge serve` is the long-running entrypoint. It starts the local HTTP/WebSocket server, the print queue worker, and the remote polling worker. It stays in the foreground and does not daemonize itself; production deployments should let systemd, launchd, Docker, or supervisor manage the process lifecycle.
 
 ## Configuration Export and Import
 

@@ -94,7 +94,10 @@ print-bridge remote enable
 print-bridge remote set-url "https://example.com/print-task"
 
 print-bridge task
+print-bridge serve
 ```
+
+`print-bridge serve` 会以前台进程方式启动无 GUI Agent，适合由 systemd、launchd、Docker 或 supervisor 托管为后台服务。
 
 CLI 直接读写与 GUI 相同的本机配置，并可查看本地任务历史。完整命令见 [技术说明](docs/printbridge-technical.md#cli-运维入口)。
 

@@ -14,6 +14,8 @@ pub const APP_CONFIG_DIR_NAME: &str = "com.vergil.printbridge";
 pub const CONFIG_FILE_NAME: &str = "config.json";
 /// 本地任务历史数据库文件名。
 pub const TASK_HISTORY_FILE_NAME: &str = "task_history.sqlite3";
+/// 远程任务去重和状态回报数据库文件名。
+pub const REMOTE_STORE_FILE_NAME: &str = "remote.sqlite3";
 /// 覆盖配置文件路径的环境变量名。
 pub const CONFIG_PATH_OVERRIDE_ENV: &str = "PRINT_BRIDGE_CONFIG_PATH";
 /// 覆盖数据目录路径的环境变量名。
@@ -45,24 +47,26 @@ pub fn cli_config_path() -> Result<PathBuf, io::Error> {
         return Ok(PathBuf::from(path));
     }
 
-    Ok(cli_config_dir()?.join(CONFIG_FILE_NAME))
+    Ok(cli_data_dir()?.join(CONFIG_FILE_NAME))
 }
 
 /// 返回 CLI 使用的任务历史数据库路径。
 pub fn cli_task_history_path() -> Result<PathBuf, io::Error> {
-    if let Some(dir) = env::var_os(DATA_DIR_OVERRIDE_ENV) {
-        return Ok(PathBuf::from(dir).join(TASK_HISTORY_FILE_NAME));
-    }
-
-    Ok(cli_config_dir()?.join(TASK_HISTORY_FILE_NAME))
+    Ok(cli_data_dir()?.join(TASK_HISTORY_FILE_NAME))
 }
 
-fn cli_config_dir() -> Result<PathBuf, io::Error> {
+/// 返回 CLI 和 headless serve 使用的数据目录。
+pub fn cli_data_dir() -> Result<PathBuf, io::Error> {
     if let Some(dir) = env::var_os(DATA_DIR_OVERRIDE_ENV) {
         return Ok(PathBuf::from(dir));
     }
 
     platform_config_dir().map(|dir| dir.join(APP_CONFIG_DIR_NAME))
+}
+
+/// 返回 headless serve 使用的远程任务数据库路径。
+pub fn cli_remote_store_path() -> Result<PathBuf, io::Error> {
+    Ok(cli_data_dir()?.join(REMOTE_STORE_FILE_NAME))
 }
 
 #[cfg(target_os = "windows")]
@@ -244,5 +248,85 @@ impl AgentConfig {
         let content =
             serde_json::to_string_pretty(&config).expect("AgentConfig should always serialize");
         fs::write(path, content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        env,
+        ffi::OsString,
+        sync::{Mutex, OnceLock},
+    };
+    use uuid::Uuid;
+
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe {
+                    env::set_var(self.key, value);
+                },
+                None => unsafe {
+                    env::remove_var(self.key);
+                },
+            }
+        }
+    }
+
+    fn set_env(key: &'static str, value: &std::path::Path) -> EnvGuard {
+        let previous = env::var_os(key);
+        unsafe {
+            env::set_var(key, value);
+        }
+        EnvGuard { key, previous }
+    }
+
+    fn clear_env(key: &'static str) -> EnvGuard {
+        let previous = env::var_os(key);
+        unsafe {
+            env::remove_var(key);
+        }
+        EnvGuard { key, previous }
+    }
+
+    #[test]
+    fn cli_data_dir_uses_data_dir_override() {
+        let _lock = test_lock();
+        let data_dir = std::env::temp_dir().join(format!("print-bridge-data-{}", Uuid::new_v4()));
+        let _data_guard = set_env(DATA_DIR_OVERRIDE_ENV, &data_dir);
+        let _config_guard = clear_env(CONFIG_PATH_OVERRIDE_ENV);
+
+        assert_eq!(cli_data_dir().unwrap(), data_dir);
+    }
+
+    #[test]
+    fn cli_config_path_prefers_config_path_override() {
+        let _lock = test_lock();
+        let data_dir = std::env::temp_dir().join(format!("print-bridge-data-{}", Uuid::new_v4()));
+        let config_path =
+            std::env::temp_dir().join(format!("print-bridge-{}.json", Uuid::new_v4()));
+        let _data_guard = set_env(DATA_DIR_OVERRIDE_ENV, &data_dir);
+        let _config_guard = set_env(CONFIG_PATH_OVERRIDE_ENV, &config_path);
+
+        assert_eq!(cli_config_path().unwrap(), config_path);
+        assert_eq!(
+            cli_task_history_path().unwrap(),
+            data_dir.join(TASK_HISTORY_FILE_NAME)
+        );
+        assert_eq!(
+            cli_remote_store_path().unwrap(),
+            data_dir.join(REMOTE_STORE_FILE_NAME)
+        );
     }
 }

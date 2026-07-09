@@ -2,6 +2,7 @@ use crate::{
     config::{cli_config_path, cli_task_history_path, AgentConfig},
     printing::{default_backend, PrintBackend, PrinterInfo},
     protocol::{validate_origin, EffectivePaper},
+    runtime,
     task_history::{TaskHistoryEvent, TaskHistoryJob, TaskHistoryStore},
 };
 use clap::{error::ErrorKind, Args, CommandFactory, Parser, Subcommand};
@@ -36,6 +37,7 @@ pub enum CliError {
     Usage(String),
     Printing(String),
     Config(String),
+    Serve(String),
     TaskHistory(String),
 }
 
@@ -46,6 +48,7 @@ impl fmt::Display for CliError {
             Self::Usage(message) => formatter.write_str(message),
             Self::Printing(message) => formatter.write_str(message),
             Self::Config(message) => formatter.write_str(message),
+            Self::Serve(message) => formatter.write_str(message),
             Self::TaskHistory(message) => formatter.write_str(message),
         }
     }
@@ -66,6 +69,8 @@ struct PrintBridgeCli {
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
+    #[command(about = "Run the local Agent without the Tauri GUI.")]
+    Serve,
     /// Get printer list or printer information.
     Printer(PrinterArgs),
     /// Get or set default paper.
@@ -180,6 +185,7 @@ where
     };
 
     match cli.command {
+        Some(CliCommand::Serve) => handle_serve_command(),
         Some(CliCommand::Printer(args)) => handle_printer_command(args, backend),
         Some(CliCommand::Paper(args)) => handle_paper_command(args, backend),
         Some(CliCommand::Origin(args)) => handle_origin_command(args),
@@ -242,6 +248,12 @@ fn handle_printer_command(
             "usage: print-bridge printer [printer-name]|set-default <printer-name>".to_string(),
         )),
     }
+}
+
+fn handle_serve_command() -> CliResult<CliOutput> {
+    runtime::run_headless_from_env()
+        .map(|_| CliOutput::ok(String::new()))
+        .map_err(|error| CliError::Serve(error.to_string()))
 }
 
 fn handle_paper_command(
@@ -832,6 +844,7 @@ mod tests {
 
         assert_eq!(output.exit_code, 0);
         assert!(output.stdout.contains("Usage: print-bridge"));
+        assert!(output.stdout.contains("serve"));
         assert!(output.stdout.contains("printer"));
         assert!(output.stdout.contains("remote"));
         assert!(output.stdout.contains("task"));
@@ -844,6 +857,17 @@ mod tests {
         assert_eq!(output.exit_code, 0);
         assert!(output.stdout.contains("Usage: print-bridge printer"));
         assert!(output.stdout.contains("set-default"));
+    }
+
+    #[test]
+    fn serve_help_returns_command_help_without_starting_runtime() {
+        let output = run_cli_with_backend(["serve", "--help"], &fake_backend()).unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stdout.contains("Usage: print-bridge serve"));
+        assert!(output
+            .stdout
+            .contains("Run the local Agent without the Tauri GUI."));
     }
 
     #[test]

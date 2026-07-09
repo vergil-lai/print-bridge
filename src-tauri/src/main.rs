@@ -10,8 +10,29 @@ fn main() {
 }
 
 fn is_cli_invocation() -> bool {
+    is_cli_command(std::env::args().nth(1).as_deref())
+}
+
+fn is_cli_command(command: Option<&str>) -> bool {
     matches!(
-        std::env::args().nth(1).as_deref(),
-        Some("help" | "--help" | "-h" | "printer" | "paper" | "origin" | "remote" | "task")
+        command,
+        Some(
+            "help" | "--help" | "-h" | "serve" | "printer" | "paper" | "origin" | "remote" | "task"
+        )
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serve_is_cli_invocation() {
+        assert!(is_cli_command(Some("serve")));
+    }
+
+    #[test]
+    fn unknown_command_is_not_cli_invocation() {
+        assert!(!is_cli_command(Some("missing")));
+    }
 }

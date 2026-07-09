@@ -94,7 +94,10 @@ print-bridge remote enable
 print-bridge remote set-url "https://example.com/print-task"
 
 print-bridge task
+print-bridge serve
 ```
+
+`print-bridge serve` starts the no-GUI Agent as a foreground process, suitable for systemd, launchd, Docker, or supervisor.
 
 The CLI reads and writes the same local configuration as the GUI and can inspect local task history. See the [technical documentation](docs/printbridge-technical_en.md#cli-operations) for the full command list.
 

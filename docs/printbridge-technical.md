@@ -114,9 +114,12 @@ print-bridge remote set-interval 10
 print-bridge task
 print-bridge task "JOB-001"
 print-bridge task clear
+print-bridge serve
 ```
 
 CLI 直接读写与 GUI 相同的 `config.json`，并读取本地 `task_history.sqlite3`。它适合 macOS/Linux 的无头主机、server 版系统或树莓派等没有常驻 GUI 的部署环境。
+
+`print-bridge serve` 是长驻入口，会启动本地 HTTP/WebSocket 服务、打印队列 worker 和远程轮询 worker。它保持前台运行，不自行后台化；生产环境应交给 systemd、launchd、Docker 或 supervisor 管理进程生命周期。
 
 ## 配置导出与导入
 

@@ -106,17 +106,28 @@ pub fn configured_addr(config: &AgentConfig) -> Result<SocketAddr, AddrParseErro
 }
 
 /// 在当前任务中运行本地服务。
-pub async fn run_server(state: AppState) -> Result<(), ServerError> {
-    let config = state.config.read().await.clone();
-    let addr = configured_addr(&config)?;
+pub async fn bind_listener(config: &AgentConfig) -> Result<(SocketAddr, TcpListener), ServerError> {
+    let addr = configured_addr(config)?;
     let listener = TcpListener::bind(addr).await?;
+    let addr = listener.local_addr()?;
+    Ok((addr, listener))
+}
 
+/// 使用已经绑定的监听器运行本地服务。
+pub async fn serve_listener(state: AppState, listener: TcpListener) -> Result<(), ServerError> {
     axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await?;
     Ok(())
+}
+
+/// 在当前任务中运行本地服务。
+pub async fn run_server(state: AppState) -> Result<(), ServerError> {
+    let config = state.config.read().await.clone();
+    let (_, listener) = bind_listener(&config).await?;
+    serve_listener(state, listener).await
 }
 
 /// 返回服务健康检查内容。
