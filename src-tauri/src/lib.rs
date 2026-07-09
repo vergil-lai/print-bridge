@@ -38,12 +38,11 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            tray::setup_tray(app)?;
-
             let app_config_dir = app.path().app_config_dir()?;
             std::fs::create_dir_all(&app_config_dir)?;
             let config_path = app_config_dir.join("config.json");
             let config = AgentConfig::load(&config_path)?;
+            tray::setup_tray(app, config.app.language)?;
             let printing = print_backend(app)?;
             let remote_store =
                 remote_store::RemoteStore::open(&app_config_dir.join("remote.sqlite3"))

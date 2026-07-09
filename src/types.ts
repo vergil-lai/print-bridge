@@ -27,6 +27,7 @@ export interface AgentConfig {
   };
   app: {
     autostart: boolean;
+    language: 'zh-CN' | 'en';
   };
   remote: {
     enabled: boolean;

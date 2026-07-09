@@ -1,8 +1,8 @@
 use print_bridge_lib::{
     config::{
         cli_config_path, cli_task_history_path, AgentConfig, AppConfig, LimitsConfig,
-        PrintingConfig, RemoteConfig, SecurityConfig, ServiceConfig, CONFIG_PATH_OVERRIDE_ENV,
-        DATA_DIR_OVERRIDE_ENV,
+        PrintingConfig, RemoteConfig, SecurityConfig, ServiceConfig, UiLanguage,
+        CONFIG_PATH_OVERRIDE_ENV, DATA_DIR_OVERRIDE_ENV,
     },
     protocol::EffectivePaper,
 };
@@ -49,6 +49,7 @@ fn agent_config_defaults_match_grouped_baseline() {
     assert_eq!(config.limits.max_copies, 100);
     assert_eq!(config.limits.download_timeout_seconds, 30);
     assert!(!config.app.autostart);
+    assert_eq!(config.app.language, UiLanguage::ZhCn);
     assert!(!config.remote.enabled);
     assert_eq!(config.remote.endpoint_url, None);
     assert_eq!(config.remote.bearer_token, None);
@@ -84,7 +85,10 @@ fn agent_config_json_roundtrips() {
             max_copies: 8,
             download_timeout_seconds: 15,
         },
-        app: AppConfig { autostart: true },
+        app: AppConfig {
+            autostart: true,
+            language: UiLanguage::En,
+        },
         remote: RemoteConfig {
             enabled: true,
             endpoint_url: Some("https://api.example.com/print-task".to_string()),
@@ -126,6 +130,7 @@ fn agent_config_loads_legacy_json_without_remote_config() {
 
     assert_eq!(decoded.remote, RemoteConfig::default());
     assert_eq!(decoded.security.allowed_ips, vec!["127.0.0.1".to_string()]);
+    assert_eq!(decoded.app.language, UiLanguage::ZhCn);
 }
 
 #[test]
@@ -154,6 +159,7 @@ fn agent_config_loads_legacy_json_without_allowed_ips() {
         vec!["https://example.com"]
     );
     assert_eq!(decoded.security.allowed_ips, vec!["127.0.0.1"]);
+    assert_eq!(decoded.app.language, UiLanguage::ZhCn);
 }
 
 #[test]

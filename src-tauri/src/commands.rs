@@ -9,6 +9,7 @@ use crate::{
     remote_client::RemoteClient,
     task_history::{TaskHistoryEvent, TaskHistoryJob},
     test_print::print_calibration_page_with_config,
+    tray::apply_tray_language,
 };
 use std::{net::TcpListener, path::PathBuf};
 use tauri::State;
@@ -39,7 +40,10 @@ pub async fn save_config(
     }
 
     apply_autostart(&app, config.app.autostart)?;
-    save_config_for_state(config, &state).await
+    let saved = save_config_for_state(config, &state).await?;
+    apply_tray_language(&app, saved.app.language).map_err(|error| error.to_string())?;
+
+    Ok(saved)
 }
 
 /// 导出当前配置到加密文件。

@@ -654,7 +654,7 @@ fn validate_payload(payload: &ConfigTransferPayload) -> Result<(), ConfigTransfe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AgentConfig, RemoteConfig};
+    use crate::config::{AgentConfig, RemoteConfig, UiLanguage};
 
     fn sample_config() -> AgentConfig {
         let mut config = AgentConfig::default();
@@ -705,6 +705,18 @@ mod tests {
         assert_eq!(remote.endpoint_url, None);
         assert_eq!(remote.bearer_token, None);
         assert_eq!(remote.max_report_retries, None);
+    }
+
+    #[test]
+    fn build_payload_does_not_export_ui_language() {
+        let mut config = sample_config();
+        config.app.language = UiLanguage::En;
+
+        let payload = build_transfer_payload(&config, &ExportConfigOptions::all());
+        let json = serde_json::to_string(&payload).unwrap();
+
+        assert!(!json.contains("language"));
+        assert!(!json.contains("app"));
     }
 
     #[test]

@@ -35,6 +35,10 @@ fn default_allowed_ips() -> Vec<String> {
     vec![REQUIRED_LOOPBACK_IP.to_string()]
 }
 
+fn default_ui_language() -> UiLanguage {
+    UiLanguage::ZhCn
+}
+
 /// 返回 CLI 使用的配置文件路径。
 pub fn cli_config_path() -> Result<PathBuf, io::Error> {
     if let Some(path) = env::var_os(CONFIG_PATH_OVERRIDE_ENV) {
@@ -136,6 +140,17 @@ pub struct LimitsConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
     pub autostart: bool,
+    #[serde(default = "default_ui_language")]
+    pub language: UiLanguage,
+}
+
+/// 桌面 UI 语言。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UiLanguage {
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+    #[serde(rename = "en")]
+    En,
 }
 
 /// 远程任务轮询和状态回报设置。
@@ -189,7 +204,10 @@ impl Default for AgentConfig {
                 max_copies: 100,
                 download_timeout_seconds: 30,
             },
-            app: AppConfig { autostart: false },
+            app: AppConfig {
+                autostart: false,
+                language: UiLanguage::ZhCn,
+            },
             remote: RemoteConfig::default(),
         }
     }

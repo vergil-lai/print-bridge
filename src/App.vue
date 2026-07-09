@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import {
   Download,
   ExternalLink,
@@ -83,6 +84,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { DEFAULT_UI_LANGUAGE, isUiLanguage, setI18nLocale, type UiLanguage } from '@/i18n';
 
 const DEFAULT_PAPER: EffectivePaper = {
   width_mm: 60,
@@ -108,6 +110,11 @@ const MIN_REMOTE_MAX_REPORT_RETRIES = 1;
 const REQUIRED_LOOPBACK_IP = '127.0.0.1';
 const THEME_STORAGE_KEY = 'printbridge.theme';
 type ThemeMode = 'system' | 'light' | 'dark';
+
+const DEFAULT_APP_CONFIG: AgentConfig['app'] = {
+  autostart: false,
+  language: DEFAULT_UI_LANGUAGE,
+};
 
 const config = ref<AgentConfig | null>(null);
 const printers = ref<PrinterInfo[]>([]);
@@ -158,6 +165,8 @@ let colorSchemeQuery: MediaQueryList | null = null;
 let taskHistoryRequestId = 0;
 let taskEventsRequestId = 0;
 
+const { t } = useI18n();
+
 /** UI 请求当前使用的本地服务端口。 */
 const servicePort = computed(() => activePort.value ?? config.value?.service.port ?? 0);
 /** 保存的配置端口是否还未在当前服务中生效。 */
@@ -169,9 +178,9 @@ const hasPendingPortChange = computed(
 );
 /** 顶部状态栏显示的可读状态。 */
 const statusLabel = computed(() => {
-  if (loadingConfig.value) return '加载中';
-  if (errorMessage.value) return '需处理';
-  return '已就绪';
+  if (loadingConfig.value) return t('loading');
+  if (errorMessage.value) return t('needsAttention');
+  return t('ready');
 });
 /** 根据当前错误状态计算状态徽标样式。 */
 const statusVariant = computed(() => (errorMessage.value ? 'destructive' : 'secondary'));
@@ -199,10 +208,10 @@ const currentAppVersion = computed(() => updateInfo.value?.currentVersion ?? app
 const availableUpdateVersion = computed(() => updateInfo.value?.version ?? '-');
 /** 根据当前更新状态生成主按钮文案。 */
 const updateButtonLabel = computed(() => {
-  if (installingUpdate.value) return '更新中';
-  if (updateInfo.value?.version) return `更新到 v${updateInfo.value.version}`;
+  if (installingUpdate.value) return t('updating');
+  if (updateInfo.value?.version) return `${t('updateToVersion')} v${updateInfo.value.version}`;
 
-  return '下载并安装';
+  return t('downloadAndInstall');
 });
 /** 当前配置是否足够提交测试打印。 */
 const canTestPrint = computed(
@@ -242,10 +251,22 @@ const selectedTask = computed(
   () => taskHistory.value.find((item) => item.job_id === selectedTaskJobId.value) ?? null,
 );
 
+/** 当前设置的 UI 语言。 */
+const currentLanguage = computed(() => config.value?.app.language ?? DEFAULT_APP_CONFIG.language);
+
+watch(currentLanguage, (language) => setI18nLocale(language), { immediate: true });
+
 /** 确保加载后的配置始终有可用的默认纸张对象。 */
 function normalizeConfig(value: AgentConfig): AgentConfig {
   return {
     ...value,
+    app: {
+      ...DEFAULT_APP_CONFIG,
+      ...value.app,
+      language: isUiLanguage(value.app?.language)
+        ? value.app.language
+        : DEFAULT_APP_CONFIG.language,
+    },
     security: {
       ...value.security,
       allowed_ips: normalizeAllowedIps(value.security.allowed_ips ?? []),
@@ -307,9 +328,14 @@ function setThemeMode(value: string): void {
   applyTheme(nextMode);
 }
 
+/** 更新 UI 语言，随保存配置持久化。 */
+function setLanguage(value: string): void {
+  if (!config.value) return;
+  config.value.app.language = isUiLanguage(value) ? value : DEFAULT_APP_CONFIG.language;
+}
+
 /** 生成单个主题选项按钮的样式类。 */
-function themeOptionClass(mode: ThemeMode): string {
-  const isActive = themeMode.value === mode;
+function segmentedOptionClass(isActive: boolean): string {
   return [
     'inline-flex h-8 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
@@ -317,6 +343,14 @@ function themeOptionClass(mode: ThemeMode): string {
       ? 'bg-primary text-primary-foreground shadow-sm'
       : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
   ].join(' ');
+}
+
+function themeOptionClass(mode: ThemeMode): string {
+  return segmentedOptionClass(themeMode.value === mode);
+}
+
+function languageOptionClass(language: UiLanguage): string {
+  return segmentedOptionClass(currentLanguage.value === language);
 }
 
 /** 系统配色变化时重新应用系统主题。 */
@@ -440,9 +474,9 @@ async function runExportConfig(): Promise<void> {
 
     await exportConfigFile(path, exportPassword.value, exportOptions.value);
     showExportDialog.value = false;
-    successMessage.value = '配置已导出';
+    successMessage.value = t('configExported');
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '导出配置失败';
+    errorMessage.value = error instanceof Error ? error.message : t('exportConfigFailed');
   } finally {
     exportingConfig.value = false;
   }
@@ -483,7 +517,7 @@ async function handlePreviewConfigImport(): Promise<void> {
     importPreview.value = await previewConfigImport(importPath.value, importPassword.value);
   } catch (error) {
     importPreview.value = null;
-    importErrorMessage.value = error instanceof Error ? error.message : '导入预览失败';
+    importErrorMessage.value = error instanceof Error ? error.message : t('importPreviewFailed');
   } finally {
     previewingConfigImport.value = false;
   }
@@ -501,9 +535,9 @@ async function handleImportConfig(): Promise<void> {
       await importConfigFile(importPath.value, importPassword.value, importPreview.value.file_hash),
     );
     showImportDialog.value = false;
-    successMessage.value = '配置已导入';
+    successMessage.value = t('configImported');
   } catch (error) {
-    importErrorMessage.value = error instanceof Error ? error.message : '导入配置失败';
+    importErrorMessage.value = error instanceof Error ? error.message : t('importConfigFailed');
   } finally {
     importingConfig.value = false;
   }
@@ -525,7 +559,7 @@ async function loadConfig(): Promise<void> {
     activePort.value = config.value.service.port;
     await Promise.all([refreshPrinters(), refreshTaskHistory()]);
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '加载配置失败';
+    errorMessage.value = error instanceof Error ? error.message : t('loadConfigFailed');
   } finally {
     loadingConfig.value = false;
   }
@@ -558,7 +592,7 @@ async function refreshPrinters(): Promise<void> {
   } catch (error) {
     printers.value = [];
     papers.value = [];
-    errorMessage.value = error instanceof Error ? error.message : '刷新打印机失败';
+    errorMessage.value = error instanceof Error ? error.message : t('refreshPrintersFailed');
   } finally {
     loadingPrinters.value = false;
   }
@@ -578,7 +612,7 @@ async function refreshPapers(): Promise<void> {
     papers.value = await fetchPapers(servicePort.value, config.value.printing.default_printer);
   } catch (error) {
     papers.value = [];
-    errorMessage.value = error instanceof Error ? error.message : '刷新纸张失败';
+    errorMessage.value = error instanceof Error ? error.message : t('refreshPapersFailed');
   } finally {
     loadingPapers.value = false;
   }
@@ -606,16 +640,16 @@ async function persistConfig(): Promise<void> {
     config.value = normalizeConfig(await saveConfig(config.value));
     if (portChanged) {
       if (await isDebugBuild()) {
-        successMessage.value = '设置已保存；开发模式下请手动重启 pnpm tauri dev 后生效';
+        successMessage.value = t('settingsSavedDev');
         return;
       }
-      successMessage.value = '设置已保存，正在重启应用';
+      successMessage.value = t('settingsSavedRestarting');
       await relaunchApp();
       return;
     }
-    successMessage.value = '设置已保存';
+    successMessage.value = t('settingsSaved');
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '保存或重启失败';
+    errorMessage.value = error instanceof Error ? error.message : t('saveOrRestartFailed');
   } finally {
     saving.value = false;
   }
@@ -630,9 +664,9 @@ async function handleTestRemoteConnection(): Promise<void> {
 
   try {
     await testRemoteConnection(config.value);
-    successMessage.value = '远程任务连接测试通过';
+    successMessage.value = t('remoteConnectionPassed');
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '远程任务连接测试失败';
+    errorMessage.value = error instanceof Error ? error.message : t('remoteConnectionFailed');
   } finally {
     testingRemote.value = false;
   }
@@ -647,9 +681,9 @@ async function handleTestPrint(): Promise<void> {
 
   try {
     await printTestPage(config.value);
-    successMessage.value = '测试打印已提交';
+    successMessage.value = t('testPrintSubmitted');
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '测试打印失败';
+    errorMessage.value = error instanceof Error ? error.message : t('testPrintFailed');
   } finally {
     testingPrint.value = false;
   }
@@ -678,7 +712,7 @@ async function refreshTaskHistory(): Promise<void> {
     }
   } catch (error) {
     if (requestId !== taskHistoryRequestId) return;
-    errorMessage.value = error instanceof Error ? error.message : '任务历史加载失败';
+    errorMessage.value = error instanceof Error ? error.message : t('taskHistoryLoadFailed');
   } finally {
     if (requestId === taskHistoryRequestId) {
       loadingTaskHistory.value = false;
@@ -701,7 +735,7 @@ async function selectTask(jobId: string): Promise<void> {
     errorMessage.value = '';
   } catch (error) {
     if (requestId !== taskEventsRequestId || selectedTaskJobId.value !== jobId) return;
-    errorMessage.value = error instanceof Error ? error.message : '任务状态加载失败';
+    errorMessage.value = error instanceof Error ? error.message : t('taskStatusLoadFailed');
   } finally {
     if (requestId === taskEventsRequestId && selectedTaskJobId.value === jobId) {
       loadingTaskEvents.value = false;
@@ -730,10 +764,10 @@ async function handleClearTaskHistory(): Promise<void> {
     selectedTaskJobId.value = null;
     selectedTaskEvents.value = [];
     confirmingClearTaskHistory.value = false;
-    successMessage.value = '任务历史已清空';
+    successMessage.value = t('taskHistoryCleared');
   } catch (error) {
     confirmingClearTaskHistory.value = false;
-    errorMessage.value = error instanceof Error ? error.message : '清空任务历史失败';
+    errorMessage.value = error instanceof Error ? error.message : t('taskHistoryClearFailed');
   } finally {
     clearingTaskHistory.value = false;
   }
@@ -747,7 +781,7 @@ function addOrigin(): void {
 
   if (!origin) return;
   if (!isValidOrigin(origin)) {
-    originErrorMessage.value = '请输入有效 Origin，例如 https://example.com';
+    originErrorMessage.value = t('invalidOrigin');
     return;
   }
   if (config.value.security.allowed_origins.includes(origin)) return;
@@ -843,9 +877,7 @@ function addAllowedIp(): void {
 
   if (!entry) return;
   if (!isValidAllowedIpEntry(entry)) {
-    ipErrorMessage.value = isAnyAddressEntry(entry)
-      ? '0.0.0.0 不能作为白名单项，请填写具体 IP 或局域网网段'
-      : '请输入有效 IP 或 CIDR 网段';
+    ipErrorMessage.value = isAnyAddressEntry(entry) ? t('invalidAnyIp') : t('invalidIp');
     return;
   }
   if (config.value.security.allowed_ips.includes(entry)) return;
@@ -859,7 +891,7 @@ function addAllowedIp(): void {
 function removeAllowedIp(entry: string): void {
   if (!config.value) return;
   if (isFixedAllowedIp(entry)) {
-    ipErrorMessage.value = '127.0.0.1 是默认允许项，不能删除';
+    ipErrorMessage.value = t('loopbackFixed');
     return;
   }
 
@@ -876,31 +908,50 @@ function formatDateTime(value: string): string {
   return date.toLocaleString();
 }
 
-/** 返回任务状态的中文标签。 */
+/** 返回任务状态标签。 */
 function taskStatusLabel(status: TaskHistoryStatus): string {
-  const labels: Record<TaskHistoryStatus, string> = {
-    queued: '已排队',
-    downloading: '下载中',
-    printing: '提交中',
-    submitted: '已提交系统队列',
-    completed: '系统队列已完成',
-    failed: '失败',
-    unknown: '无法确认后续状态',
-    cancelled: '已取消',
+  const labels: Record<UiLanguage, Record<TaskHistoryStatus, string>> = {
+    'zh-CN': {
+      queued: '已排队',
+      downloading: '下载中',
+      printing: '提交中',
+      submitted: '已提交系统队列',
+      completed: '系统队列已完成',
+      failed: '失败',
+      unknown: '无法确认后续状态',
+      cancelled: '已取消',
+    },
+    en: {
+      queued: 'Queued',
+      downloading: 'Downloading',
+      printing: 'Submitting',
+      submitted: 'Submitted to system queue',
+      completed: 'System queue completed',
+      failed: 'Failed',
+      unknown: 'Unable to confirm next status',
+      cancelled: 'Cancelled',
+    },
   };
 
-  return labels[status];
+  return labels[currentLanguage.value][status];
 }
 
-/** 返回任务来源的中文标签。 */
+/** 返回任务来源标签。 */
 function taskSourceLabel(source: TaskHistorySource): string {
-  const labels: Record<TaskHistorySource, string> = {
-    web_socket: '网页',
-    remote: '远程',
-    test: '测试',
+  const labels: Record<UiLanguage, Record<TaskHistorySource, string>> = {
+    'zh-CN': {
+      web_socket: '网页',
+      remote: '远程',
+      test: '测试',
+    },
+    en: {
+      web_socket: 'Web',
+      remote: 'Remote',
+      test: 'Test',
+    },
   };
 
-  return labels[source];
+  return labels[currentLanguage.value][source];
 }
 
 /** 格式化字节数用于更新下载进度展示。 */
@@ -942,17 +993,17 @@ async function checkForUpdate(): Promise<void> {
     const update = await checkForAppUpdate();
     if (!update) {
       updateStatus.value = 'not-available';
-      updateMessage.value = '当前版本已经是最新版本';
+      updateMessage.value = t('latestVersion');
       return;
     }
 
     availableUpdate.value = update;
     updateInfo.value = toUpdateInfo(update);
     updateStatus.value = 'available';
-    updateMessage.value = `检测到新版本：${update.version}`;
+    updateMessage.value = `${t('updateAvailablePrefix')}${update.version}`;
   } catch (error) {
     updateStatus.value = 'error';
-    updateMessage.value = error instanceof Error ? error.message : '检查更新失败';
+    updateMessage.value = error instanceof Error ? error.message : t('checkUpdateFailed');
   }
 }
 
@@ -961,7 +1012,7 @@ async function installAvailableUpdate(): Promise<void> {
   if (!availableUpdate.value) return;
 
   updateStatus.value = 'downloading';
-  updateMessage.value = '正在下载并安装更新';
+  updateMessage.value = t('downloadingInstallingUpdate');
   updateProgress.value = {
     downloadedBytes: 0,
     contentLength: null,
@@ -972,10 +1023,10 @@ async function installAvailableUpdate(): Promise<void> {
       updateProgress.value = progress;
     });
     updateStatus.value = 'installed';
-    updateMessage.value = '更新已安装，重启后生效';
+    updateMessage.value = t('updateInstalled');
   } catch (error) {
     updateStatus.value = 'error';
-    updateMessage.value = error instanceof Error ? error.message : '安装更新失败';
+    updateMessage.value = error instanceof Error ? error.message : t('installUpdateFailed');
   }
 }
 
@@ -985,7 +1036,7 @@ async function restartAfterUpdate(): Promise<void> {
     await relaunchApp();
   } catch (error) {
     updateStatus.value = 'error';
-    updateMessage.value = error instanceof Error ? error.message : '重启应用失败';
+    updateMessage.value = error instanceof Error ? error.message : t('restartAppFailed');
   }
 }
 
@@ -995,7 +1046,7 @@ async function openGitHubRepository(): Promise<void> {
     await openUrl(GITHUB_REPOSITORY_URL);
   } catch (error) {
     updateStatus.value = 'error';
-    updateMessage.value = error instanceof Error ? error.message : '打开 GitHub 失败';
+    updateMessage.value = error instanceof Error ? error.message : t('openGithubFailed');
   }
 }
 
@@ -1005,7 +1056,7 @@ async function openReleaseNotes(): Promise<void> {
     await openUrl(GITHUB_RELEASES_URL);
   } catch (error) {
     updateStatus.value = 'error';
-    updateMessage.value = error instanceof Error ? error.message : '打开更新日志失败';
+    updateMessage.value = error instanceof Error ? error.message : t('openReleaseNotesFailed');
   }
 }
 
@@ -1032,7 +1083,7 @@ onBeforeUnmount(() => {
       >
         <div>
           <h1 class="text-xl font-semibold tracking-normal">PrintBridge</h1>
-          <p class="text-sm text-muted-foreground">本地端口 {{ servicePort || '-' }}</p>
+          <p class="text-sm text-muted-foreground">{{ t('localPort') }} {{ servicePort || '-' }}</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <Badge :variant="statusVariant">
@@ -1040,7 +1091,7 @@ onBeforeUnmount(() => {
           </Badge>
           <Button :disabled="!config || saving" @click="persistConfig">
             <Save class="size-4" />
-            {{ saving ? '保存中' : '保存' }}
+            {{ saving ? t('saving') : t('save') }}
           </Button>
           <Button
             variant="outline"
@@ -1048,7 +1099,7 @@ onBeforeUnmount(() => {
             @click="openExportDialog"
           >
             <FileDown class="size-4" />
-            导出配置
+            {{ t('exportConfig') }}
           </Button>
           <Button
             variant="outline"
@@ -1056,7 +1107,7 @@ onBeforeUnmount(() => {
             @click="openImportDialog"
           >
             <FileUp class="size-4" />
-            导入配置
+            {{ t('importConfig') }}
           </Button>
         </div>
       </header>
@@ -1074,7 +1125,7 @@ onBeforeUnmount(() => {
             variant="ghost"
             size="icon-sm"
             class="shrink-0 text-destructive hover:bg-destructive/15 hover:text-destructive"
-            aria-label="关闭错误提示"
+            :aria-label="t('closeError')"
             @click="dismissMessage('error')"
           >
             <X class="size-4" />
@@ -1092,7 +1143,7 @@ onBeforeUnmount(() => {
             variant="ghost"
             size="icon-sm"
             class="shrink-0 text-emerald-800 hover:bg-emerald-500/15 hover:text-emerald-900 dark:text-emerald-200 dark:hover:text-emerald-100"
-            aria-label="关闭成功提示"
+            :aria-label="t('closeSuccess')"
             @click="dismissMessage('success')"
           >
             <X class="size-4" />
@@ -1102,35 +1153,35 @@ onBeforeUnmount(() => {
 
       <Card v-if="loadingConfig">
         <CardContent class="py-12 text-center text-sm text-muted-foreground">
-          正在加载设置...
+          {{ t('loadingSettings') }}
         </CardContent>
       </Card>
 
       <Tabs v-else-if="config" default-value="settings">
         <TabsList class="grid w-full grid-cols-6 md:w-[720px]">
-          <TabsTrigger value="settings"> 设置 </TabsTrigger>
-          <TabsTrigger value="remote"> 远程 </TabsTrigger>
-          <TabsTrigger value="website-whitelist"> 网站白名单 </TabsTrigger>
-          <TabsTrigger value="ip-whitelist"> IP白名单 </TabsTrigger>
-          <TabsTrigger value="logs"> 任务 </TabsTrigger>
-          <TabsTrigger value="updates"> 关于 </TabsTrigger>
+          <TabsTrigger value="settings"> {{ t('settings') }} </TabsTrigger>
+          <TabsTrigger value="remote"> {{ t('remote') }} </TabsTrigger>
+          <TabsTrigger value="website-whitelist"> {{ t('websiteWhitelist') }} </TabsTrigger>
+          <TabsTrigger value="ip-whitelist"> {{ t('ipWhitelist') }} </TabsTrigger>
+          <TabsTrigger value="logs"> {{ t('tasks') }} </TabsTrigger>
+          <TabsTrigger value="updates"> {{ t('about') }} </TabsTrigger>
         </TabsList>
 
         <TabsContent value="settings" class="mt-2">
           <Card>
             <CardHeader class="pb-3">
-              <CardTitle class="text-base"> 打印设置 </CardTitle>
+              <CardTitle class="text-base"> {{ t('printSettings') }} </CardTitle>
             </CardHeader>
             <CardContent class="grid gap-5">
               <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
                 <div class="grid gap-2">
-                  <Label for="default-printer">默认打印机</Label>
+                  <Label for="default-printer">{{ t('defaultPrinter') }}</Label>
                   <Select
                     :model-value="selectedPrinter"
                     @update:model-value="handlePrinterChange(String($event))"
                   >
                     <SelectTrigger id="default-printer" class="w-full">
-                      <SelectValue placeholder="选择打印机" />
+                      <SelectValue :placeholder="t('selectPrinter')" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem
@@ -1138,7 +1189,7 @@ onBeforeUnmount(() => {
                         :key="printer.name"
                         :value="printer.name"
                       >
-                        {{ printer.name }}{{ printer.is_default ? '（系统默认）' : '' }}
+                        {{ printer.name }}{{ printer.is_default ? ` (${t('systemDefault')})` : '' }}
                       </SelectItem>
                     </SelectContent>
                   </Select>
@@ -1150,7 +1201,7 @@ onBeforeUnmount(() => {
                   @click="refreshPrinters"
                 >
                   <RefreshCw class="size-4" :class="{ 'animate-spin': loadingPrinters }" />
-                  刷新
+                  {{ t('refresh') }}
                 </Button>
                 <Button
                   class="whitespace-nowrap"
@@ -1159,7 +1210,7 @@ onBeforeUnmount(() => {
                   @click="handleTestPrint"
                 >
                   <Printer class="size-4" />
-                  {{ testingPrint ? '提交中' : '测试打印' }}
+                  {{ testingPrint ? t('submitting') : t('testPrint') }}
                 </Button>
               </div>
 
@@ -1167,16 +1218,16 @@ onBeforeUnmount(() => {
                 class="grid items-start gap-4 md:grid-cols-[minmax(0,1.35fr)_minmax(140px,0.45fr)_minmax(140px,0.45fr)]"
               >
                 <div class="grid gap-2">
-                  <Label for="default-paper">默认纸张</Label>
+                  <Label for="default-paper">{{ t('defaultPaper') }}</Label>
                   <Select
                     :model-value="selectedPaper"
                     @update:model-value="selectedPaper = String($event)"
                   >
                     <SelectTrigger id="default-paper" class="w-full">
-                      <SelectValue placeholder="选择纸张" />
+                      <SelectValue :placeholder="t('selectPaper')" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="custom"> 自定义尺寸 </SelectItem>
+                      <SelectItem value="custom"> {{ t('customSize') }} </SelectItem>
                       <SelectItem v-for="paper in papers" :key="paper.id" :value="paper.id">
                         {{ formatPaperLabel(paper) }}
                       </SelectItem>
@@ -1185,15 +1236,15 @@ onBeforeUnmount(() => {
                   <p class="text-xs text-muted-foreground">
                     {{
                       loadingPapers
-                        ? '正在读取纸张列表'
+                        ? t('loadingPapers')
                         : papers.length
-                          ? '可选择驱动纸张，也可直接编辑尺寸'
-                          : '未读取到纸张列表，可直接编辑默认尺寸'
+                          ? t('paperListReady')
+                          : t('paperListEmpty')
                     }}
                   </p>
                 </div>
                 <div class="grid gap-2">
-                  <Label for="paper-width">宽度（mm）</Label>
+                  <Label for="paper-width">{{ t('widthMm') }}</Label>
                   <Input
                     id="paper-width"
                     type="number"
@@ -1204,7 +1255,7 @@ onBeforeUnmount(() => {
                   />
                 </div>
                 <div class="grid gap-2">
-                  <Label for="paper-height">高度（mm）</Label>
+                  <Label for="paper-height">{{ t('heightMm') }}</Label>
                   <Input
                     id="paper-height"
                     type="number"
@@ -1222,7 +1273,7 @@ onBeforeUnmount(() => {
 
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
-                  <Label for="service-port">本地端口</Label>
+                  <Label for="service-port">{{ t('localPort') }}</Label>
                   <Input
                     id="service-port"
                     type="number"
@@ -1232,13 +1283,13 @@ onBeforeUnmount(() => {
                     @update:model-value="setPort"
                   />
                   <p v-if="hasPendingPortChange" class="text-xs text-muted-foreground">
-                    当前会话仍连接 {{ activePort }}，保存后将重启应用生效。
+                    {{ t('portPendingPrefix') }} {{ activePort }}{{ t('portPendingSuffix') }}
                   </p>
                 </div>
                 <div class="grid gap-2">
-                  <Label for="autostart">开机自启</Label>
+                  <Label for="autostart">{{ t('autostart') }}</Label>
                   <div class="flex min-h-10 items-center justify-between gap-3">
-                    <p class="text-xs text-muted-foreground">启动系统后自动运行 PrintBridge</p>
+                    <p class="text-xs text-muted-foreground">{{ t('autostartHint') }}</p>
                     <Switch id="autostart" v-model="config.app.autostart" />
                   </div>
                 </div>
@@ -1246,42 +1297,67 @@ onBeforeUnmount(() => {
 
               <Separator />
 
-              <div
-                class="flex flex-col gap-3 rounded-md border px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <Label>界面主题</Label>
-                <div
-                  class="grid w-full grid-cols-3 gap-1 rounded-lg border bg-muted/40 p-1 sm:w-auto"
-                  role="group"
-                  aria-label="界面主题"
-                >
-                  <button
-                    type="button"
-                    :class="themeOptionClass('light')"
-                    :aria-pressed="themeMode === 'light'"
-                    @click="setThemeMode('light')"
+              <div class="grid gap-4 rounded-md border px-3 py-3 md:grid-cols-2">
+                <div class="grid gap-2">
+                  <Label>{{ t('appearance') }}</Label>
+                  <div
+                    class="grid w-full grid-cols-3 gap-1 rounded-lg border bg-muted/40 p-1"
+                    role="group"
+                    :aria-label="t('appearance')"
                   >
-                    <Sun class="size-4" />
-                    <span>浅色</span>
-                  </button>
-                  <button
-                    type="button"
-                    :class="themeOptionClass('dark')"
-                    :aria-pressed="themeMode === 'dark'"
-                    @click="setThemeMode('dark')"
+                    <button
+                      type="button"
+                      :class="themeOptionClass('light')"
+                      :aria-pressed="themeMode === 'light'"
+                      @click="setThemeMode('light')"
+                    >
+                      <Sun class="size-4" />
+                      <span>{{ t('light') }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      :class="themeOptionClass('dark')"
+                      :aria-pressed="themeMode === 'dark'"
+                      @click="setThemeMode('dark')"
+                    >
+                      <Moon class="size-4" />
+                      <span>{{ t('dark') }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      :class="themeOptionClass('system')"
+                      :aria-pressed="themeMode === 'system'"
+                      @click="setThemeMode('system')"
+                    >
+                      <Monitor class="size-4" />
+                      <span>{{ t('system') }}</span>
+                    </button>
+                  </div>
+                </div>
+                <div class="grid gap-2">
+                  <Label>{{ t('language') }}</Label>
+                  <div
+                    class="grid w-full grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1"
+                    role="group"
+                    :aria-label="t('language')"
                   >
-                    <Moon class="size-4" />
-                    <span>深色</span>
-                  </button>
-                  <button
-                    type="button"
-                    :class="themeOptionClass('system')"
-                    :aria-pressed="themeMode === 'system'"
-                    @click="setThemeMode('system')"
-                  >
-                    <Monitor class="size-4" />
-                    <span>跟随系统</span>
-                  </button>
+                    <button
+                      type="button"
+                      :class="languageOptionClass('zh-CN')"
+                      :aria-pressed="currentLanguage === 'zh-CN'"
+                      @click="setLanguage('zh-CN')"
+                    >
+                      <span>{{ t('chinese') }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      :class="languageOptionClass('en')"
+                      :aria-pressed="currentLanguage === 'en'"
+                      @click="setLanguage('en')"
+                    >
+                      <span>{{ t('english') }}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -1292,14 +1368,14 @@ onBeforeUnmount(() => {
           <Card>
             <CardHeader class="pb-3">
               <div class="flex items-center justify-between gap-3">
-                <CardTitle class="text-base"> 远程任务 </CardTitle>
+                <CardTitle class="text-base"> {{ t('remoteTasks') }} </CardTitle>
                 <Switch id="remote-enabled" v-model="config.remote.enabled" />
               </div>
             </CardHeader>
             <CardContent class="grid gap-5">
               <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <div class="grid min-w-0 gap-2">
-                  <Label for="remote-url">任务 URL</Label>
+                  <Label for="remote-url">{{ t('taskUrl') }}</Label>
                   <Input
                     id="remote-url"
                     type="url"
@@ -1315,7 +1391,7 @@ onBeforeUnmount(() => {
                   @click="handleTestRemoteConnection"
                 >
                   <RefreshCw class="size-4" :class="{ 'animate-spin': testingRemote }" />
-                  {{ testingRemote ? '测试中' : '测试连接' }}
+                  {{ testingRemote ? t('testing') : t('testConnection') }}
                 </Button>
               </div>
 
@@ -1347,7 +1423,7 @@ onBeforeUnmount(() => {
                       @click="generateRemoteDeviceId"
                     >
                       <Shuffle class="size-4" />
-                      随机生成
+                      {{ t('randomGenerate') }}
                     </Button>
                   </div>
                 </div>
@@ -1363,7 +1439,7 @@ onBeforeUnmount(() => {
 
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
-                  <Label for="remote-poll-interval">轮询时间（秒）</Label>
+                  <Label for="remote-poll-interval">{{ t('pollIntervalSeconds') }}</Label>
                   <Input
                     id="remote-poll-interval"
                     type="number"
@@ -1373,7 +1449,7 @@ onBeforeUnmount(() => {
                   />
                 </div>
                 <div class="grid gap-2">
-                  <Label for="remote-max-retries">上报重试次数</Label>
+                  <Label for="remote-max-retries">{{ t('reportRetries') }}</Label>
                   <Input
                     id="remote-max-retries"
                     type="number"
@@ -1390,7 +1466,7 @@ onBeforeUnmount(() => {
         <TabsContent value="website-whitelist" class="mt-2">
           <Card>
             <CardHeader class="pb-3">
-              <CardTitle class="text-base"> 网站白名单 </CardTitle>
+              <CardTitle class="text-base"> {{ t('websiteWhitelist') }} </CardTitle>
             </CardHeader>
             <CardContent class="grid gap-4">
               <form class="flex items-start gap-2" @submit.prevent="addOrigin">
@@ -1405,7 +1481,7 @@ onBeforeUnmount(() => {
                     {{ originErrorMessage }}
                   </p>
                 </div>
-                <Button type="submit"> 添加 </Button>
+                <Button type="submit"> {{ t('add') }} </Button>
               </form>
               <div class="grid gap-2">
                 <div
@@ -1417,7 +1493,7 @@ onBeforeUnmount(() => {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label="删除 Origin"
+                    :aria-label="t('deleteOrigin')"
                     @click="removeOrigin(origin)"
                   >
                     <Trash2 class="size-4" />
@@ -1427,7 +1503,7 @@ onBeforeUnmount(() => {
                   v-if="config.security.allowed_origins.length === 0"
                   class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground"
                 >
-                  暂无白名单 Origin
+                  {{ t('noWhitelistOrigins') }}
                 </p>
               </div>
             </CardContent>
@@ -1437,14 +1513,14 @@ onBeforeUnmount(() => {
         <TabsContent value="ip-whitelist" class="mt-2">
           <Card>
             <CardHeader class="pb-3">
-              <CardTitle class="text-base"> IP 白名单 </CardTitle>
+              <CardTitle class="text-base"> {{ t('ipWhitelist') }} </CardTitle>
             </CardHeader>
             <CardContent class="grid gap-4">
               <form class="flex items-start gap-2" @submit.prevent="addAllowedIp">
                 <div class="grid flex-1 gap-1">
                   <Input
                     v-model="ipDraft"
-                    placeholder="192.168.1.23 或 192.168.1.0/24"
+                    :placeholder="t('ipPlaceholder')"
                     autocomplete="off"
                     :aria-invalid="ipErrorMessage ? 'true' : 'false'"
                   />
@@ -1452,7 +1528,7 @@ onBeforeUnmount(() => {
                     {{ ipErrorMessage }}
                   </p>
                 </div>
-                <Button type="submit"> 添加 </Button>
+                <Button type="submit"> {{ t('add') }} </Button>
               </form>
               <div class="grid gap-2">
                 <div
@@ -1465,12 +1541,12 @@ onBeforeUnmount(() => {
                     v-if="!isFixedAllowedIp(entry)"
                     variant="ghost"
                     size="icon-sm"
-                    aria-label="删除 IP 白名单"
+                    :aria-label="t('deleteIpWhitelist')"
                     @click="removeAllowedIp(entry)"
                   >
                     <Trash2 class="size-4" />
                   </Button>
-                  <Badge v-else variant="secondary"> 默认 </Badge>
+                  <Badge v-else variant="secondary"> {{ t('default') }} </Badge>
                 </div>
               </div>
             </CardContent>
@@ -1480,8 +1556,8 @@ onBeforeUnmount(() => {
         <TabsContent value="updates" class="mt-2">
           <div class="grid gap-4">
             <div>
-              <h2 class="text-base font-semibold tracking-normal">关于</h2>
-              <p class="text-sm text-muted-foreground">查看版本信息与更新状态。</p>
+              <h2 class="text-base font-semibold tracking-normal">{{ t('about') }}</h2>
+              <p class="text-sm text-muted-foreground">{{ t('aboutSubtitle') }}</p>
             </div>
 
             <Card>
@@ -1492,9 +1568,9 @@ onBeforeUnmount(() => {
                     <div class="min-w-0">
                       <div class="flex flex-wrap items-center gap-2">
                         <h3 class="text-xl font-semibold tracking-normal">PrintBridge</h3>
-                        <Badge variant="outline">版本 v{{ currentAppVersion }}</Badge>
+                        <Badge variant="outline">{{ t('version') }} v{{ currentAppVersion }}</Badge>
                       </div>
-                      <p class="mt-2 text-sm text-muted-foreground">本地打印桥接程序</p>
+                      <p class="mt-2 text-sm text-muted-foreground">{{ t('aboutDescription') }}</p>
                     </div>
                   </div>
 
@@ -1505,7 +1581,7 @@ onBeforeUnmount(() => {
                     </Button>
                     <Button variant="outline" @click="openReleaseNotes">
                       <ExternalLink class="size-4" />
-                      更新日志
+                      {{ t('releaseNotes') }}
                     </Button>
                     <Button
                       variant="outline"
@@ -1513,7 +1589,7 @@ onBeforeUnmount(() => {
                       @click="checkForUpdate"
                     >
                       <RefreshCw class="size-4" :class="{ 'animate-spin': checkingUpdate }" />
-                      {{ checkingUpdate ? '检查中' : '检查更新' }}
+                      {{ checkingUpdate ? t('checking') : t('checkUpdates') }}
                     </Button>
                     <Button
                       v-if="availableUpdate && updateStatus !== 'installed'"
@@ -1529,7 +1605,7 @@ onBeforeUnmount(() => {
                       @click="restartAfterUpdate"
                     >
                       <RotateCw class="size-4" />
-                      重启应用
+                      {{ t('restartApp') }}
                     </Button>
                   </div>
                 </div>
@@ -1545,10 +1621,10 @@ onBeforeUnmount(() => {
                   }"
                 >
                   <span v-if="updateStatus === 'available'">
-                    检测到新版本：{{ availableUpdateVersion }}
+                    {{ t('updateAvailablePrefix') }}{{ availableUpdateVersion }}
                   </span>
                   <span v-else-if="updateMessage">{{ updateMessage }}</span>
-                  <span v-else>点击检查更新获取最新版本状态。</span>
+                  <span v-else>{{ t('updateStatusIdle') }}</span>
                 </div>
 
                 <div v-if="installingUpdate" class="grid gap-2">
@@ -1564,7 +1640,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div v-if="updateInfo?.body" class="grid gap-2">
-                  <Label>更新说明</Label>
+                  <Label>{{ t('updateNotes') }}</Label>
                   <div
                     class="max-h-36 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/20 px-3 py-2 text-sm"
                   >
@@ -1579,7 +1655,7 @@ onBeforeUnmount(() => {
         <TabsContent value="logs" class="mt-2">
           <Card>
             <CardHeader class="flex flex-row items-center justify-between pb-3">
-              <CardTitle class="text-base"> 打印任务 </CardTitle>
+              <CardTitle class="text-base"> {{ t('printTasks') }} </CardTitle>
               <div class="flex items-center gap-2">
                 <Button
                   variant="outline"
@@ -1588,7 +1664,7 @@ onBeforeUnmount(() => {
                   @click="refreshTaskHistory"
                 >
                   <RefreshCw class="size-4" :class="{ 'animate-spin': loadingTaskHistory }" />
-                  刷新
+                  {{ t('refresh') }}
                 </Button>
                 <Button
                   :variant="confirmingClearTaskHistory ? 'destructive' : 'outline'"
@@ -1597,7 +1673,7 @@ onBeforeUnmount(() => {
                   @click="handleClearTaskHistory"
                 >
                   <Trash2 class="size-4" />
-                  {{ confirmingClearTaskHistory ? '确认清空' : '清空' }}
+                  {{ confirmingClearTaskHistory ? t('confirmClear') : t('clear') }}
                 </Button>
               </div>
             </CardHeader>
@@ -1606,17 +1682,17 @@ onBeforeUnmount(() => {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead class="w-[170px]"> 时间 </TableHead>
-                      <TableHead class="w-[145px]"> 状态 </TableHead>
-                      <TableHead class="w-[80px]"> 来源 </TableHead>
+                      <TableHead class="w-[170px]"> {{ t('time') }} </TableHead>
+                      <TableHead class="w-[145px]"> {{ t('status') }} </TableHead>
+                      <TableHead class="w-[80px]"> {{ t('source') }} </TableHead>
                       <TableHead class="w-[150px]"> Job </TableHead>
-                      <TableHead class="w-[150px]"> 打印机 </TableHead>
-                      <TableHead> 消息 </TableHead>
+                      <TableHead class="w-[150px]"> {{ t('printer') }} </TableHead>
+                      <TableHead> {{ t('message') }} </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     <TableEmpty v-if="taskHistory.length === 0" :colspan="6">
-                      {{ loadingTaskHistory ? '正在加载任务...' : '暂无任务' }}
+                      {{ loadingTaskHistory ? t('loadingTasks') : t('noTasks') }}
                     </TableEmpty>
                     <TableRow
                       v-for="entry in taskHistory"
@@ -1654,31 +1730,31 @@ onBeforeUnmount(() => {
               <div class="min-w-0 rounded-md border">
                 <div class="min-w-0 border-b px-3 py-2">
                   <div class="truncate text-sm font-medium">
-                    {{ selectedTask?.job_id ?? '任务详情' }}
+                    {{ selectedTask?.job_id ?? t('taskDetails') }}
                   </div>
                   <div class="mt-1 break-words text-xs text-muted-foreground">
                     {{
                       selectedTask
-                        ? `${selectedTask.paper_name ?? '-'} · ${selectedTask.copies ?? '-'} 份`
-                        : '选择左侧任务查看状态'
+                        ? `${selectedTask.paper_name ?? '-'} · ${selectedTask.copies ?? '-'} ${t('copiesUnit')}`
+                        : t('selectTaskHint')
                     }}
                   </div>
                 </div>
                 <ScrollArea class="h-[360px]">
                   <div v-if="!selectedTaskJobId" class="px-3 py-8 text-sm text-muted-foreground">
-                    暂无选中任务
+                    {{ t('noSelectedTask') }}
                   </div>
                   <div
                     v-else-if="loadingTaskEvents"
                     class="px-3 py-8 text-sm text-muted-foreground"
                   >
-                    正在加载状态...
+                    {{ t('loadingStatus') }}
                   </div>
                   <div
                     v-else-if="selectedTaskEvents.length === 0"
                     class="px-3 py-8 text-sm text-muted-foreground"
                   >
-                    暂无状态记录
+                    {{ t('noStatusRecords') }}
                   </div>
                   <div v-else class="grid gap-3 p-3">
                     <div
@@ -1712,52 +1788,52 @@ onBeforeUnmount(() => {
       >
         <Card class="w-full max-w-lg">
           <CardHeader class="pb-3">
-            <CardTitle class="text-base">导出配置</CardTitle>
+            <CardTitle class="text-base">{{ t('exportConfig') }}</CardTitle>
           </CardHeader>
           <CardContent class="grid gap-4">
             <div class="grid gap-3">
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.service_port" type="checkbox" />
-                本地端口
+                {{ t('localPort') }}
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.allowed_origins" type="checkbox" />
-                网站白名单
+                {{ t('websiteWhitelist') }}
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.allowed_ips" type="checkbox" />
-                IP 白名单
+                {{ t('ipWhitelist') }}
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.remote_enabled" type="checkbox" />
-                远程任务开关
+                {{ t('remoteTaskSwitch') }}
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.remote_endpoint_url" type="checkbox" />
-                远程任务 URL
+                {{ t('remoteTaskUrl') }}
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.remote_bearer_token" type="checkbox" />
-                远程任务 Authorization Token
+                {{ t('remoteTaskAuthorizationToken') }}
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.remote_poll_interval_seconds" type="checkbox" />
-                轮询时间
+                {{ t('pollInterval') }}
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <input v-model="exportOptions.remote_max_report_retries" type="checkbox" />
-                上报重试次数
+                {{ t('reportRetries') }}
               </label>
             </div>
 
             <div class="grid gap-2">
-              <Label for="export-password">密码</Label>
+              <Label for="export-password">{{ t('password') }}</Label>
               <Input id="export-password" v-model="exportPassword" type="password" />
             </div>
 
             <Alert v-if="showEmptyPasswordTokenConfirm" variant="warning">
               <AlertDescription>
-                已选择导出 Authorization Token，且密码为空。确认后仍会导出加密文件。
+                {{ t('exportEmptyPasswordWarning') }}
               </AlertDescription>
             </Alert>
 
@@ -1767,7 +1843,7 @@ onBeforeUnmount(() => {
                 :disabled="exportingConfig"
                 @click="showExportDialog = false"
               >
-                取消
+                {{ t('cancel') }}
               </Button>
               <Button
                 v-if="showEmptyPasswordTokenConfirm"
@@ -1775,10 +1851,10 @@ onBeforeUnmount(() => {
                 :disabled="exportingConfig"
                 @click="confirmEmptyPasswordExport"
               >
-                确认空密码导出
+                {{ t('confirmEmptyPasswordExport') }}
               </Button>
               <Button :disabled="exportingConfig" @click="handleExportConfig">
-                {{ exportingConfig ? '导出中' : '导出' }}
+                {{ exportingConfig ? t('exporting') : t('export') }}
               </Button>
             </div>
           </CardContent>
@@ -1792,11 +1868,11 @@ onBeforeUnmount(() => {
         <div class="flex max-h-full w-full items-center justify-center">
           <Card class="flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col">
             <CardHeader class="shrink-0 pb-3">
-              <CardTitle class="text-base">导入配置</CardTitle>
+              <CardTitle class="text-base">{{ t('importConfig') }}</CardTitle>
             </CardHeader>
             <CardContent class="flex min-h-0 flex-1 flex-col gap-4">
               <div class="grid gap-2">
-                <Label for="import-path">配置文件</Label>
+                <Label for="import-path">{{ t('configFile') }}</Label>
                 <div class="flex gap-2">
                   <Input
                     id="import-path"
@@ -1809,13 +1885,13 @@ onBeforeUnmount(() => {
                     :disabled="previewingConfigImport"
                     @click="chooseImportFile"
                   >
-                    选择
+                    {{ t('choose') }}
                   </Button>
                 </div>
               </div>
 
               <div class="grid gap-2">
-                <Label for="import-password">密码</Label>
+                <Label for="import-password">{{ t('password') }}</Label>
                 <Input
                   id="import-password"
                   v-model="importPassword"
@@ -1834,9 +1910,9 @@ onBeforeUnmount(() => {
                 v-if="importPreview"
                 class="flex min-h-0 flex-col gap-2 rounded-md border bg-muted/20 p-3"
               >
-                <div class="shrink-0 text-sm font-medium">导入变更</div>
+                <div class="shrink-0 text-sm font-medium">{{ t('importChanges') }}</div>
                 <div v-if="importPreview.items.length === 0" class="text-sm text-muted-foreground">
-                  没有可导入的变更
+                  {{ t('noImportChanges') }}
                 </div>
                 <div v-else class="grid max-h-[35vh] min-h-0 gap-2 overflow-y-auto pr-1">
                   <div
@@ -1858,14 +1934,14 @@ onBeforeUnmount(() => {
                   :disabled="previewingConfigImport || importingConfig"
                   @click="showImportDialog = false"
                 >
-                  取消
+                  {{ t('cancel') }}
                 </Button>
                 <Button
                   variant="outline"
                   :disabled="!importPath || previewingConfigImport || importingConfig"
                   @click="handlePreviewConfigImport"
                 >
-                  {{ previewingConfigImport ? '预览中' : '预览' }}
+                  {{ previewingConfigImport ? t('previewing') : t('preview') }}
                 </Button>
                 <Button
                   :disabled="
@@ -1876,7 +1952,7 @@ onBeforeUnmount(() => {
                   "
                   @click="handleImportConfig"
                 >
-                  {{ importingConfig ? '导入中' : '确认导入' }}
+                  {{ importingConfig ? t('importing') : t('confirmImport') }}
                 </Button>
               </div>
             </CardContent>
