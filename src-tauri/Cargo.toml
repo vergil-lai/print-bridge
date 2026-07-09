@@ -1,6 +1,6 @@
 [package]
 name = "print-bridge"
-version = "0.1.3"
+version = "0.1.4"
 description = "Local printing bridge for trusted Web pages."
 authors = ["Vergil Lai"]
 license = "Apache-2.0"
