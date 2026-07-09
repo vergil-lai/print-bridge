@@ -86,6 +86,7 @@ fn platform_config_dir() -> Result<PathBuf, io::Error> {
     home_dir().map(|home| home.join(".config"))
 }
 
+#[cfg(unix)]
 fn home_dir() -> Result<PathBuf, io::Error> {
     env::var_os("HOME")
         .map(PathBuf::from)

@@ -246,6 +246,7 @@ pub(crate) fn common_label_papers() -> Vec<PaperInfo> {
 }
 
 /// 返回 CUPS 介质 token；已有驱动 token 时保持原值。
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 pub(crate) fn cups_media_option(paper: &PaperInfo) -> String {
     if is_cups_media_token(&paper.id) {
         paper.id.clone()
@@ -266,6 +267,7 @@ pub(crate) fn sumatra_print_settings(copies: u16, paper: &PaperInfo) -> String {
 }
 
 /// 根据纸张尺寸构造自定义 CUPS 介质选项。
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 pub(crate) fn custom_media_option(width_mm: f64, height_mm: f64) -> String {
     format!("Custom.{}x{}mm", format_mm(width_mm), format_mm(height_mm))
 }
@@ -306,6 +308,7 @@ pub(crate) fn resolve_paper_for_print(papers: &[PaperInfo], paper: &PaperInfo) -
 }
 
 /// 检测 CUPS 自定义介质 token。
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn is_cups_media_token(value: &str) -> bool {
     value.starts_with("Custom.")
 }
