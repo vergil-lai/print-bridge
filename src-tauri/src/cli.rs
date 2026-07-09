@@ -3,6 +3,7 @@ use crate::{
     printing::{default_backend, PrintBackend, PrinterInfo},
     protocol::{validate_origin, EffectivePaper},
     runtime,
+    service_manager::{PlatformServeServiceManager, ServeServiceManager},
     task_history::{TaskHistoryEvent, TaskHistoryJob, TaskHistoryStore},
 };
 use clap::{error::ErrorKind, Args, CommandFactory, Parser, Subcommand};
@@ -70,7 +71,7 @@ struct PrintBridgeCli {
 #[derive(Debug, Subcommand)]
 enum CliCommand {
     #[command(about = "Run the local Agent without the Tauri GUI.")]
-    Serve,
+    Serve(ServeArgs),
     /// Get printer list or printer information.
     Printer(PrinterArgs),
     /// Get or set default paper.
@@ -81,6 +82,22 @@ enum CliCommand {
     Remote(RemoteArgs),
     /// Get or clear local task history.
     Task(TaskArgs),
+}
+
+#[derive(Debug, Args)]
+struct ServeArgs {
+    #[cfg(not(target_os = "windows"))]
+    #[command(subcommand)]
+    command: Option<ServeCommand>,
+}
+
+#[cfg(not(target_os = "windows"))]
+#[derive(Debug, Subcommand)]
+enum ServeCommand {
+    /// Install PrintBridge serve as a systemd user service or macOS LaunchAgent.
+    Install,
+    /// Uninstall the systemd user service or macOS LaunchAgent.
+    Uninstall,
 }
 
 #[derive(Debug, Args)]
@@ -178,6 +195,20 @@ where
     S: Into<String>,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    let service_manager = PlatformServeServiceManager;
+    run_cli_with_backend_and_service_manager(args, backend, &service_manager)
+}
+
+fn run_cli_with_backend_and_service_manager<I, S>(
+    args: I,
+    backend: &(dyn PrintBackend + Send + Sync),
+    service_manager: &dyn ServeServiceManager,
+) -> CliResult<CliOutput>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     let cli = match parse_cli(args) {
         Ok(cli) => cli,
         Err(CliError::Help(message)) => return Ok(CliOutput::ok(message)),
@@ -185,7 +216,7 @@ where
     };
 
     match cli.command {
-        Some(CliCommand::Serve) => handle_serve_command(),
+        Some(CliCommand::Serve(args)) => handle_serve_command(args, service_manager),
         Some(CliCommand::Printer(args)) => handle_printer_command(args, backend),
         Some(CliCommand::Paper(args)) => handle_paper_command(args, backend),
         Some(CliCommand::Origin(args)) => handle_origin_command(args),
@@ -250,8 +281,39 @@ fn handle_printer_command(
     }
 }
 
-fn handle_serve_command() -> CliResult<CliOutput> {
+fn handle_serve_command(
+    args: ServeArgs,
+    service_manager: &dyn ServeServiceManager,
+) -> CliResult<CliOutput> {
+    #[cfg(not(target_os = "windows"))]
+    match args.command {
+        Some(ServeCommand::Install) => {
+            return service_action_to_cli_output(service_manager.install());
+        }
+        Some(ServeCommand::Uninstall) => {
+            return service_action_to_cli_output(service_manager.uninstall());
+        }
+        None => {}
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = args;
+        let _ = service_manager;
+    }
+
     serve_result_to_cli_output(runtime::run_headless_from_env())
+}
+
+fn service_action_to_cli_output(
+    result: Result<
+        crate::service_manager::ServiceActionOutput,
+        crate::service_manager::ServiceManagerError,
+    >,
+) -> CliResult<CliOutput> {
+    result
+        .map(|output| CliOutput::ok(output.message))
+        .map_err(|error| CliError::Serve(error.to_string()))
 }
 
 fn serve_result_to_cli_output(
@@ -878,6 +940,39 @@ mod tests {
         assert!(output
             .stdout
             .contains("Run the local Agent without the Tauri GUI."));
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(output.stdout.contains("install"));
+            assert!(output.stdout.contains("uninstall"));
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn serve_install_uses_service_manager() {
+        let output = run_cli_with_backend_and_service_manager(
+            ["serve", "install"],
+            &fake_backend(),
+            &FakeServeServiceManager,
+        )
+        .unwrap();
+
+        assert_eq!(output.stdout, "installed\n");
+        assert_eq!(output.exit_code, 0);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn serve_uninstall_uses_service_manager() {
+        let output = run_cli_with_backend_and_service_manager(
+            ["serve", "uninstall"],
+            &fake_backend(),
+            &FakeServeServiceManager,
+        )
+        .unwrap();
+
+        assert_eq!(output.stdout, "uninstalled\n");
+        assert_eq!(output.exit_code, 0);
     }
 
     #[test]
@@ -1054,5 +1149,33 @@ mod tests {
         assert!(store.recent_jobs(50).unwrap().is_empty());
         drop(store);
         fs::remove_dir_all(&data_dir).unwrap();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    struct FakeServeServiceManager;
+
+    #[cfg(not(target_os = "windows"))]
+    impl crate::service_manager::ServeServiceManager for FakeServeServiceManager {
+        fn install(
+            &self,
+        ) -> Result<
+            crate::service_manager::ServiceActionOutput,
+            crate::service_manager::ServiceManagerError,
+        > {
+            Ok(crate::service_manager::ServiceActionOutput {
+                message: "installed\n".to_string(),
+            })
+        }
+
+        fn uninstall(
+            &self,
+        ) -> Result<
+            crate::service_manager::ServiceActionOutput,
+            crate::service_manager::ServiceManagerError,
+        > {
+            Ok(crate::service_manager::ServiceActionOutput {
+                message: "uninstalled\n".to_string(),
+            })
+        }
     }
 }

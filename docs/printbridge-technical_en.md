@@ -115,11 +115,13 @@ print-bridge task
 print-bridge task "JOB-001"
 print-bridge task clear
 print-bridge serve
+print-bridge serve install
+print-bridge serve uninstall
 ```
 
 The CLI reads and writes the same `config.json` used by the GUI, and reads the local `task_history.sqlite3`. It is useful for macOS/Linux headless machines, server installations, Raspberry Pi deployments, or other environments without a persistent GUI session.
 
-`print-bridge serve` is the long-running entrypoint. It starts the local HTTP/WebSocket server, the print queue worker, and the remote polling worker. It stays in the foreground and does not daemonize itself; production deployments should let systemd, launchd, Windows Service, or supervisor manage the process lifecycle.
+`print-bridge serve` is the long-running entrypoint. It starts the local HTTP/WebSocket server, the print queue worker, and the remote polling worker. It stays in the foreground and does not daemonize itself; production deployments should let systemd, launchd, Windows Service, or supervisor manage the process lifecycle. On Linux/macOS, use `print-bridge serve install` and `print-bridge serve uninstall` to install or remove the managed service. Windows does not provide these two commands.
 
 ## Hosting `serve`
 
@@ -163,6 +165,27 @@ PRINT_BRIDGE_CONFIG_PATH=/etc/printbridge/config.json
 ### Linux systemd
 
 On Linux, prefer a systemd user service so the Agent runs as the user that configured the printer. This keeps CUPS default printers, user permissions, and logs easier to reason about.
+
+Recommended install command:
+
+```bash
+print-bridge serve install
+```
+
+This writes the current `print-bridge` executable path to `~/.config/systemd/user/print-bridge.service`, then runs:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now print-bridge.service
+```
+
+Remove the service:
+
+```bash
+print-bridge serve uninstall
+```
+
+If you need to inspect or customize the service file manually, use the equivalent template below.
 
 Example file: `~/.config/systemd/user/print-bridge.service`
 
@@ -211,6 +234,20 @@ echo "PrintBridge test" | lp
 ### macOS launchd
 
 On macOS, prefer a LaunchAgent instead of a LaunchDaemon. A LaunchAgent runs with the login user session and is more likely to access that user's printers, keychain, and permission environment.
+
+Recommended install command:
+
+```bash
+print-bridge serve install
+```
+
+This writes the current `print-bridge` executable path to `~/Library/LaunchAgents/com.printbridge.agent.plist`, then loads and starts it with `launchctl`. Remove the service:
+
+```bash
+print-bridge serve uninstall
+```
+
+If you need to inspect or customize the plist manually, use the equivalent template below.
 
 Example file: `~/Library/LaunchAgents/com.printbridge.agent.plist`
 
@@ -267,7 +304,7 @@ launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.printbridge.agent.pl
 
 ### Windows Service
 
-For regular Windows desktop use, keep using the Tauri GUI. A Windows Service runs in a service session. Whether it can see printers depends on whether the printer is installed per-machine or per-user, which service account runs it, and whether the driver is available to that account. Do not assume a Windows Service can access every printer visible to the desktop user.
+For regular Windows desktop use, keep using the Tauri GUI. `print-bridge serve install` and `print-bridge serve uninstall` are not provided on Windows. A Windows Service runs in a service session. Whether it can see printers depends on whether the printer is installed per-machine or per-user, which service account runs it, and whether the driver is available to that account. Do not assume a Windows Service can access every printer visible to the desktop user.
 
 If unattended operation is required, use WinSW, NSSM, or a similar wrapper to host the foreground command:
 

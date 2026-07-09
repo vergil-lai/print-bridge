@@ -115,11 +115,13 @@ print-bridge task
 print-bridge task "JOB-001"
 print-bridge task clear
 print-bridge serve
+print-bridge serve install
+print-bridge serve uninstall
 ```
 
 CLI 直接读写与 GUI 相同的 `config.json`，并读取本地 `task_history.sqlite3`。它适合 macOS/Linux 的无头主机、server 版系统或树莓派等没有常驻 GUI 的部署环境。
 
-`print-bridge serve` 是长驻入口，会启动本地 HTTP/WebSocket 服务、打印队列 worker 和远程轮询 worker。它保持前台运行，不自行后台化；生产环境应交给 systemd、launchd、Windows Service 或 supervisor 管理进程生命周期。
+`print-bridge serve` 是长驻入口，会启动本地 HTTP/WebSocket 服务、打印队列 worker 和远程轮询 worker。它保持前台运行，不自行后台化；生产环境应交给 systemd、launchd、Windows Service 或 supervisor 管理进程生命周期。Linux/macOS 可以用 `print-bridge serve install` 和 `print-bridge serve uninstall` 安装或删除托管服务；Windows 不提供这两个命令。
 
 ## `serve` 托管部署
 
@@ -163,6 +165,27 @@ PRINT_BRIDGE_CONFIG_PATH=/etc/printbridge/config.json
 ### Linux systemd
 
 Linux 建议优先使用 systemd user service，让 Agent 以实际配置打印机的用户身份运行。这样 CUPS 默认打印机、用户权限和日志都更容易对齐。
+
+推荐直接安装：
+
+```bash
+print-bridge serve install
+```
+
+该命令会把当前 `print-bridge` 可执行文件路径写入 `~/.config/systemd/user/print-bridge.service`，并执行：
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now print-bridge.service
+```
+
+删除服务：
+
+```bash
+print-bridge serve uninstall
+```
+
+如果需要人工检查或自定义 service 文件，可以参考下面的等价模板。
 
 示例文件：`~/.config/systemd/user/print-bridge.service`
 
@@ -211,6 +234,20 @@ echo "PrintBridge test" | lp
 ### macOS launchd
 
 macOS 建议优先使用 LaunchAgent，而不是 LaunchDaemon。LaunchAgent 跟随用户登录会话运行，更容易访问该用户配置的打印机、钥匙串和权限环境。
+
+推荐直接安装：
+
+```bash
+print-bridge serve install
+```
+
+该命令会把当前 `print-bridge` 可执行文件路径写入 `~/Library/LaunchAgents/com.printbridge.agent.plist`，并通过 `launchctl` 加载和启动。删除服务：
+
+```bash
+print-bridge serve uninstall
+```
+
+如果需要人工检查或自定义 plist 文件，可以参考下面的等价模板。
 
 示例文件：`~/Library/LaunchAgents/com.printbridge.agent.plist`
 
@@ -267,7 +304,7 @@ launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.printbridge.agent.pl
 
 ### Windows Service
 
-Windows 上普通用户场景仍推荐使用 Tauri GUI 常驻。Windows Service 运行在服务会话中，能否看到打印机取决于打印机是按机器安装还是按用户安装、服务账号是谁、驱动是否对服务账号可用。不要默认认为 Windows Service 能访问桌面用户看到的所有打印机。
+Windows 上普通用户场景仍推荐使用 Tauri GUI 常驻。`print-bridge serve install` 和 `print-bridge serve uninstall` 不在 Windows 上提供。Windows Service 运行在服务会话中，能否看到打印机取决于打印机是按机器安装还是按用户安装、服务账号是谁、驱动是否对服务账号可用。不要默认认为 Windows Service 能访问桌面用户看到的所有打印机。
 
 如果确实需要无人值守运行，可以使用 WinSW、NSSM 或同类 wrapper 托管：
 

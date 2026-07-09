@@ -95,9 +95,11 @@ print-bridge remote set-url "https://example.com/print-task"
 
 print-bridge task
 print-bridge serve
+print-bridge serve install
+print-bridge serve uninstall
 ```
 
-`print-bridge serve` starts the no-GUI Agent as a foreground process, suitable for systemd, launchd, Docker, or supervisor.
+`print-bridge serve` starts the no-GUI Agent as a foreground process. On Linux/macOS, `print-bridge serve install` installs it as a systemd user service or launchd LaunchAgent, and `print-bridge serve uninstall` removes it. Windows does not provide these two commands; regular desktop deployments should keep using the GUI.
 
 The CLI reads and writes the same local configuration as the GUI and can inspect local task history. See the [technical documentation](docs/printbridge-technical_en.md#cli-operations) for the full command list.
 
