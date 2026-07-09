@@ -251,9 +251,19 @@ fn handle_printer_command(
 }
 
 fn handle_serve_command() -> CliResult<CliOutput> {
-    runtime::run_headless_from_env()
-        .map(|_| CliOutput::ok(String::new()))
-        .map_err(|error| CliError::Serve(error.to_string()))
+    serve_result_to_cli_output(runtime::run_headless_from_env())
+}
+
+fn serve_result_to_cli_output(
+    result: Result<runtime::HeadlessRuntimeInfo, runtime::HeadlessRuntimeError>,
+) -> CliResult<CliOutput> {
+    match result {
+        Ok(_) => Ok(CliOutput::ok(String::new())),
+        Err(runtime::HeadlessRuntimeError::AlreadyRunning(agent)) => Ok(CliOutput::ok(
+            crate::agent_guard::already_running_message(&agent),
+        )),
+        Err(error) => Err(CliError::Serve(error.to_string())),
+    }
 }
 
 fn handle_paper_command(
@@ -868,6 +878,24 @@ mod tests {
         assert!(output
             .stdout
             .contains("Run the local Agent without the Tauri GUI."));
+    }
+
+    #[test]
+    fn serve_already_running_maps_to_successful_cli_output() {
+        let agent = crate::agent_guard::RunningAgent {
+            addr: "127.0.0.1:17890".parse().unwrap(),
+        };
+
+        let output =
+            serve_result_to_cli_output(Err(runtime::HeadlessRuntimeError::AlreadyRunning(agent)))
+                .unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(
+            output.stdout,
+            "PrintBridge Agent is already running at 127.0.0.1:17890"
+        );
+        assert!(output.stderr.is_empty());
     }
 
     #[test]

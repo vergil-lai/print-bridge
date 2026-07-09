@@ -1,4 +1,5 @@
 use crate::{
+    agent_guard::{already_running_message, check_agent_port, AgentPortStatus, RunningAgent},
     app_state::AppState,
     config::{
         cli_config_path, cli_data_dir, cli_remote_store_path, cli_task_history_path, AgentConfig,
@@ -27,6 +28,8 @@ pub enum HeadlessRuntimeError {
     RemoteStore(#[from] rusqlite::Error),
     #[error("server task failed: {0}")]
     ServerTaskJoin(#[from] tokio::task::JoinError),
+    #[error("{}", already_running_message(.0))]
+    AlreadyRunning(RunningAgent),
 }
 
 /// 从当前环境变量解析路径并运行 headless Agent。
@@ -47,6 +50,10 @@ async fn run_headless() -> Result<HeadlessRuntimeInfo, HeadlessRuntimeError> {
     }
 
     let config = AgentConfig::load(&config_path)?;
+    if let AgentPortStatus::PrintBridge(agent) = check_agent_port(&config) {
+        return Err(HeadlessRuntimeError::AlreadyRunning(agent));
+    }
+
     let (listen_addr, listener) = server::bind_listener(&config).await?;
     let state = build_headless_state(config, config_path.clone())?;
 
@@ -140,5 +147,18 @@ mod tests {
         assert!(output.contains("config: /tmp/printbridge/config.json"));
         assert!(output.contains("data: /tmp/printbridge"));
         assert!(output.contains("listen: 127.0.0.1:17890"));
+    }
+
+    #[test]
+    fn already_running_error_is_readable() {
+        let agent = crate::agent_guard::RunningAgent {
+            addr: "127.0.0.1:17890".parse().unwrap(),
+        };
+        let error = HeadlessRuntimeError::AlreadyRunning(agent);
+
+        assert_eq!(
+            error.to_string(),
+            "PrintBridge Agent is already running at 127.0.0.1:17890"
+        );
     }
 }

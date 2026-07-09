@@ -119,7 +119,208 @@ print-bridge serve
 
 The CLI reads and writes the same `config.json` used by the GUI, and reads the local `task_history.sqlite3`. It is useful for macOS/Linux headless machines, server installations, Raspberry Pi deployments, or other environments without a persistent GUI session.
 
-`print-bridge serve` is the long-running entrypoint. It starts the local HTTP/WebSocket server, the print queue worker, and the remote polling worker. It stays in the foreground and does not daemonize itself; production deployments should let systemd, launchd, Docker, or supervisor manage the process lifecycle.
+`print-bridge serve` is the long-running entrypoint. It starts the local HTTP/WebSocket server, the print queue worker, and the remote polling worker. It stays in the foreground and does not daemonize itself; production deployments should let systemd, launchd, Windows Service, or supervisor manage the process lifecycle.
+
+## Hosting `serve`
+
+`print-bridge serve` is designed for fixed workstations without a GUI, small Linux hosts, macOS background login sessions, and server-style deployments. It still depends on the host operating system being able to see printers and submit jobs to the system print queue. If the system itself cannot print through `lpstat`, `lpoptions`, `lp`, or the Windows printing API, `serve` does not bypass that limitation.
+
+Choose the runtime mode by deployment scenario:
+
+| Scenario | Recommended mode | Notes |
+| --- | --- | --- |
+| Regular Windows/macOS desktop | Tauri GUI | Tray, windows, settings, auto update, and the user-session printer environment are handled by the desktop app |
+| Manual debugging or temporary run | `print-bridge serve` | Runs in the foreground and writes logs to the terminal |
+| Linux headless host | systemd user service | Suitable for Raspberry Pi, industrial PCs, and warehouse print hosts |
+| macOS background user session | launchd LaunchAgent | Runs with the login user session and is more likely to access that user's printers |
+| Windows unattended service | Windows Service wrapper | Requires separate validation that the service account can see the target printer |
+
+> **Note: the GUI and `print-bridge serve` are currently mutually exclusive.**
+>
+> If a PrintBridge Agent is already using the configured local port, the second entrypoint exits immediately and does not start its own HTTP/WebSocket server, print queue worker, or remote polling worker. This prevents two processes from consuming the print queue or remote tasks at the same time.
+>
+> Managing an already-running `serve` process from the GUI belongs to the future external Agent control mode. For now, stop the existing Agent before switching to the other entrypoint.
+
+### Paths and Environment Variables
+
+By default, the CLI and headless `serve` use the same data directory for `config.json`, `task_history.sqlite3`, and `remote.sqlite3`:
+
+| Platform | Default directory |
+| --- | --- |
+| Windows | `%APPDATA%\com.vergil.printbridge` |
+| macOS | `~/Library/Application Support/com.vergil.printbridge` |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/com.vergil.printbridge` |
+
+The paths can be overridden with environment variables:
+
+```bash
+PRINT_BRIDGE_DATA_DIR=/var/lib/printbridge
+PRINT_BRIDGE_CONFIG_PATH=/etc/printbridge/config.json
+```
+
+`PRINT_BRIDGE_CONFIG_PATH` only overrides the config file path. Task history and remote task state still use `PRINT_BRIDGE_DATA_DIR`. When `PRINT_BRIDGE_CONFIG_PATH` is not set, the config file defaults to `config.json` under the data directory.
+
+### Linux systemd
+
+On Linux, prefer a systemd user service so the Agent runs as the user that configured the printer. This keeps CUPS default printers, user permissions, and logs easier to reason about.
+
+Example file: `~/.config/systemd/user/print-bridge.service`
+
+```ini
+[Unit]
+Description=PrintBridge Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/print-bridge serve
+Restart=on-failure
+RestartSec=3
+Environment=PRINT_BRIDGE_DATA_DIR=%h/.config/com.vergil.printbridge
+Environment=PRINT_BRIDGE_CONFIG_PATH=%h/.config/com.vergil.printbridge/config.json
+
+[Install]
+WantedBy=default.target
+```
+
+Enable it and view logs:
+
+```bash
+mkdir -p ~/.config/systemd/user
+systemctl --user daemon-reload
+systemctl --user enable --now print-bridge.service
+systemctl --user status print-bridge.service
+journalctl --user -u print-bridge.service -f
+```
+
+If the service must start even when the user is not logged in, an administrator needs to enable linger:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Linux printing depends on CUPS. Before deployment, verify that the same user can see and use the target printer:
+
+```bash
+lpstat -e
+lpoptions -d
+echo "PrintBridge test" | lp
+```
+
+### macOS launchd
+
+On macOS, prefer a LaunchAgent instead of a LaunchDaemon. A LaunchAgent runs with the login user session and is more likely to access that user's printers, keychain, and permission environment.
+
+Example file: `~/Library/LaunchAgents/com.printbridge.agent.plist`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.printbridge.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/print-bridge</string>
+    <string>serve</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PRINT_BRIDGE_DATA_DIR</key>
+    <string>/Users/USERNAME/Library/Application Support/com.vergil.printbridge</string>
+    <key>PRINT_BRIDGE_CONFIG_PATH</key>
+    <string>/Users/USERNAME/Library/Application Support/com.vergil.printbridge/config.json</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/USERNAME/Library/Logs/printbridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/USERNAME/Library/Logs/printbridge.err.log</string>
+</dict>
+</plist>
+```
+
+Replace `USERNAME` with the actual username, then load the service:
+
+```bash
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.printbridge.agent.plist
+launchctl kickstart -k "gui/$(id -u)/com.printbridge.agent"
+launchctl print "gui/$(id -u)/com.printbridge.agent"
+tail -f ~/Library/Logs/printbridge.log ~/Library/Logs/printbridge.err.log
+```
+
+Stop and unload it:
+
+```bash
+launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.printbridge.agent.plist
+```
+
+### Windows Service
+
+For regular Windows desktop use, keep using the Tauri GUI. A Windows Service runs in a service session. Whether it can see printers depends on whether the printer is installed per-machine or per-user, which service account runs it, and whether the driver is available to that account. Do not assume a Windows Service can access every printer visible to the desktop user.
+
+If unattended operation is required, use WinSW, NSSM, or a similar wrapper to host the foreground command:
+
+```xml
+<service>
+  <id>PrintBridge</id>
+  <name>PrintBridge Agent</name>
+  <description>Runs print-bridge serve without the desktop UI.</description>
+  <executable>C:\Program Files\PrintBridge\print-bridge.exe</executable>
+  <arguments>serve</arguments>
+  <env name="PRINT_BRIDGE_DATA_DIR" value="C:\ProgramData\PrintBridge"/>
+  <env name="PRINT_BRIDGE_CONFIG_PATH" value="C:\ProgramData\PrintBridge\config.json"/>
+  <log mode="roll-by-size"/>
+</service>
+```
+
+Before deploying it, validate with the same service account:
+
+1. `print-bridge printer` lists the target printer
+2. `print-bridge printer set-default "Printer Name"` can write the config
+3. `print-bridge serve` starts and responds through `/health`
+4. A real print task reaches the system print queue
+
+If the target printer is only visible to the desktop login user, prefer the GUI tray app instead of a Windows Service.
+
+### Troubleshooting
+
+When `serve` starts successfully, it prints the config path, data directory, and listen address:
+
+```text
+PrintBridge serve started
+config: /path/to/config.json
+data: /path/to/data
+listen: 0.0.0.0:17890
+```
+
+Common checks:
+
+```bash
+curl http://127.0.0.1:17890/health
+print-bridge printer
+print-bridge task
+```
+
+If the service fails to start, check:
+
+- Whether the port is already in use
+- Whether the config file is valid JSON
+- Whether `PRINT_BRIDGE_CONFIG_PATH` and `PRINT_BRIDGE_DATA_DIR` are readable and writable
+- Whether CUPS is installed and enabled on Linux/macOS
+- Whether the runtime user can see the target printer
+- Whether the Origin allowlist and IP allowlist permit the caller
+- Whether the remote polling URL, token, and device ID are configured correctly
 
 ## Configuration Export and Import
 

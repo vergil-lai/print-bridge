@@ -1,3 +1,4 @@
+pub mod agent_guard;
 pub mod app_state;
 pub mod cli;
 pub mod commands;
@@ -28,6 +29,20 @@ use std::io;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
 
+fn existing_agent_startup_error(status: agent_guard::AgentPortStatus) -> Option<io::Error> {
+    match status {
+        agent_guard::AgentPortStatus::Available => None,
+        agent_guard::AgentPortStatus::PrintBridge(agent) => Some(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            agent_guard::already_running_message(&agent),
+        )),
+        agent_guard::AgentPortStatus::OccupiedByOther { addr } => Some(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!("local service port is already occupied at {addr}"),
+        )),
+    }
+}
+
 /// 启动 Tauri 应用、本地服务和后台打印 worker。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -43,6 +58,12 @@ pub fn run() {
             std::fs::create_dir_all(&app_config_dir)?;
             let config_path = app_config_dir.join("config.json");
             let config = AgentConfig::load(&config_path)?;
+            if let Some(error) =
+                existing_agent_startup_error(agent_guard::check_agent_port(&config))
+            {
+                tauri_plugin_log::log::error!("{error}");
+                return Err(error.into());
+            }
             tray::setup_tray(app, config.app.language)?;
             let printing = print_backend(app)?;
             let remote_store =
@@ -121,5 +142,44 @@ fn print_backend(app: &tauri::App) -> tauri::Result<Box<dyn printing::PrintBacke
     {
         let _ = app;
         Ok(printing::default_backend())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_guard::{AgentPortStatus, RunningAgent};
+
+    #[test]
+    fn existing_agent_startup_error_allows_available_port() {
+        assert!(existing_agent_startup_error(AgentPortStatus::Available).is_none());
+    }
+
+    #[test]
+    fn existing_agent_startup_error_blocks_print_bridge_agent() {
+        let error = existing_agent_startup_error(AgentPortStatus::PrintBridge(RunningAgent {
+            addr: "127.0.0.1:17890".parse().unwrap(),
+        }))
+        .unwrap();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            error.to_string(),
+            "PrintBridge Agent is already running at 127.0.0.1:17890"
+        );
+    }
+
+    #[test]
+    fn existing_agent_startup_error_blocks_other_occupied_port() {
+        let error = existing_agent_startup_error(AgentPortStatus::OccupiedByOther {
+            addr: "127.0.0.1:17890".parse().unwrap(),
+        })
+        .unwrap();
+
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+        assert_eq!(
+            error.to_string(),
+            "local service port is already occupied at 127.0.0.1:17890"
+        );
     }
 }

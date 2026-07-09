@@ -119,7 +119,208 @@ print-bridge serve
 
 CLI 直接读写与 GUI 相同的 `config.json`，并读取本地 `task_history.sqlite3`。它适合 macOS/Linux 的无头主机、server 版系统或树莓派等没有常驻 GUI 的部署环境。
 
-`print-bridge serve` 是长驻入口，会启动本地 HTTP/WebSocket 服务、打印队列 worker 和远程轮询 worker。它保持前台运行，不自行后台化；生产环境应交给 systemd、launchd、Docker 或 supervisor 管理进程生命周期。
+`print-bridge serve` 是长驻入口，会启动本地 HTTP/WebSocket 服务、打印队列 worker 和远程轮询 worker。它保持前台运行，不自行后台化；生产环境应交给 systemd、launchd、Windows Service 或 supervisor 管理进程生命周期。
+
+## `serve` 托管部署
+
+`print-bridge serve` 适合没有 GUI 的固定工位、Linux 小主机、macOS 后台登录会话或服务器式部署。它仍然依赖所在系统能看到打印机和打印队列；如果系统本身不能通过 `lpstat`、`lpoptions`、`lp` 或 Windows 打印 API 打印，`serve` 也不会绕过这个限制。
+
+推荐按场景选择运行方式：
+
+| 场景                    | 推荐方式                | 说明                                                       |
+| ----------------------- | ----------------------- | ---------------------------------------------------------- |
+| 普通 Windows/macOS 桌面 | Tauri GUI               | 托盘、窗口、设置、自动更新和用户会话打印环境都由桌面端负责 |
+| 手动调试或临时运行      | `print-bridge serve`    | 前台运行，日志直接输出到终端                               |
+| Linux 无头主机          | systemd user service    | 适合树莓派、工控机、仓库打印主机                           |
+| macOS 登录用户后台运行  | launchd LaunchAgent     | 跟随用户会话运行，更容易访问该用户配置的打印机             |
+| Windows 无人值守服务    | Windows Service wrapper | 需要单独验证服务账号是否能看到目标打印机                   |
+
+> **注意：GUI 和 `print-bridge serve` 当前互斥运行。**
+>
+> 同一台机器上如果已经有 PrintBridge Agent 占用当前端口，第二个入口会直接退出，不会再启动自己的 HTTP/WebSocket 服务、打印队列 worker 或远程轮询 worker。这样可以避免两个进程同时消费打印队列或远程任务。
+>
+> 如果需要从 GUI 管理已经运行的 `serve`，这是后续“外部 Agent 控制模式”的范围；当前版本应先停止已有 Agent，再启动另一种入口。
+
+### 路径和环境变量
+
+默认情况下，CLI 和 headless `serve` 使用同一个数据目录保存 `config.json`、`task_history.sqlite3` 和 `remote.sqlite3`：
+
+| 平台    | 默认目录                                               |
+| ------- | ------------------------------------------------------ |
+| Windows | `%APPDATA%\com.vergil.printbridge`                     |
+| macOS   | `~/Library/Application Support/com.vergil.printbridge` |
+| Linux   | `${XDG_CONFIG_HOME:-~/.config}/com.vergil.printbridge` |
+
+可以用环境变量覆盖路径：
+
+```bash
+PRINT_BRIDGE_DATA_DIR=/var/lib/printbridge
+PRINT_BRIDGE_CONFIG_PATH=/etc/printbridge/config.json
+```
+
+`PRINT_BRIDGE_CONFIG_PATH` 只覆盖配置文件路径；任务历史和远程任务状态仍然写入 `PRINT_BRIDGE_DATA_DIR`。如果不设置 `PRINT_BRIDGE_CONFIG_PATH`，配置文件会默认放在数据目录下的 `config.json`。
+
+### Linux systemd
+
+Linux 建议优先使用 systemd user service，让 Agent 以实际配置打印机的用户身份运行。这样 CUPS 默认打印机、用户权限和日志都更容易对齐。
+
+示例文件：`~/.config/systemd/user/print-bridge.service`
+
+```ini
+[Unit]
+Description=PrintBridge Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/print-bridge serve
+Restart=on-failure
+RestartSec=3
+Environment=PRINT_BRIDGE_DATA_DIR=%h/.config/com.vergil.printbridge
+Environment=PRINT_BRIDGE_CONFIG_PATH=%h/.config/com.vergil.printbridge/config.json
+
+[Install]
+WantedBy=default.target
+```
+
+启用和查看日志：
+
+```bash
+mkdir -p ~/.config/systemd/user
+systemctl --user daemon-reload
+systemctl --user enable --now print-bridge.service
+systemctl --user status print-bridge.service
+journalctl --user -u print-bridge.service -f
+```
+
+如果希望用户未登录时也能启动 user service，需要由管理员启用 linger：
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Linux 打印依赖 CUPS。部署前建议先确认当前用户可以看到并使用目标打印机：
+
+```bash
+lpstat -e
+lpoptions -d
+echo "PrintBridge test" | lp
+```
+
+### macOS launchd
+
+macOS 建议优先使用 LaunchAgent，而不是 LaunchDaemon。LaunchAgent 跟随用户登录会话运行，更容易访问该用户配置的打印机、钥匙串和权限环境。
+
+示例文件：`~/Library/LaunchAgents/com.printbridge.agent.plist`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.printbridge.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/print-bridge</string>
+    <string>serve</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PRINT_BRIDGE_DATA_DIR</key>
+    <string>/Users/USERNAME/Library/Application Support/com.vergil.printbridge</string>
+    <key>PRINT_BRIDGE_CONFIG_PATH</key>
+    <string>/Users/USERNAME/Library/Application Support/com.vergil.printbridge/config.json</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/USERNAME/Library/Logs/printbridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/USERNAME/Library/Logs/printbridge.err.log</string>
+</dict>
+</plist>
+```
+
+把 `USERNAME` 替换为实际用户名后，加载服务：
+
+```bash
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.printbridge.agent.plist
+launchctl kickstart -k "gui/$(id -u)/com.printbridge.agent"
+launchctl print "gui/$(id -u)/com.printbridge.agent"
+tail -f ~/Library/Logs/printbridge.log ~/Library/Logs/printbridge.err.log
+```
+
+停止并卸载：
+
+```bash
+launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.printbridge.agent.plist
+```
+
+### Windows Service
+
+Windows 上普通用户场景仍推荐使用 Tauri GUI 常驻。Windows Service 运行在服务会话中，能否看到打印机取决于打印机是按机器安装还是按用户安装、服务账号是谁、驱动是否对服务账号可用。不要默认认为 Windows Service 能访问桌面用户看到的所有打印机。
+
+如果确实需要无人值守运行，可以使用 WinSW、NSSM 或同类 wrapper 托管：
+
+```xml
+<service>
+  <id>PrintBridge</id>
+  <name>PrintBridge Agent</name>
+  <description>Runs print-bridge serve without the desktop UI.</description>
+  <executable>C:\Program Files\PrintBridge\print-bridge.exe</executable>
+  <arguments>serve</arguments>
+  <env name="PRINT_BRIDGE_DATA_DIR" value="C:\ProgramData\PrintBridge"/>
+  <env name="PRINT_BRIDGE_CONFIG_PATH" value="C:\ProgramData\PrintBridge\config.json"/>
+  <log mode="roll-by-size"/>
+</service>
+```
+
+部署前必须用同一个服务账号验证：
+
+1. `print-bridge printer` 能列出目标打印机
+2. `print-bridge printer set-default "Printer Name"` 能写入配置
+3. `print-bridge serve` 能启动并通过 `/health`
+4. 实际打印任务能进入系统打印队列
+
+如果目标打印机只在桌面登录用户下可见，优先使用 GUI 托盘常驻，而不是 Windows Service。
+
+### 排障检查
+
+`serve` 启动成功时会输出配置路径、数据目录和监听地址：
+
+```text
+PrintBridge serve started
+config: /path/to/config.json
+data: /path/to/data
+listen: 0.0.0.0:17890
+```
+
+常用检查：
+
+```bash
+curl http://127.0.0.1:17890/health
+print-bridge printer
+print-bridge task
+```
+
+如果服务启动失败，优先检查：
+
+- 端口是否被占用
+- 配置文件 JSON 是否有效
+- `PRINT_BRIDGE_CONFIG_PATH` 和 `PRINT_BRIDGE_DATA_DIR` 是否可读写
+- Linux/macOS 是否安装并启用了 CUPS
+- 运行用户是否能看到目标打印机
+- Origin 白名单和 IP 白名单是否允许当前调用方
+- 远程轮询 URL、Token 和设备 ID 是否配置正确
 
 ## 配置导出与导入
 
