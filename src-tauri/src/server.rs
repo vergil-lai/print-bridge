@@ -590,6 +590,7 @@ fn queue_error_response(request_id: Option<String>, error: QueueError) -> Server
     let error_code = match error {
         QueueError::DuplicateJobId => ErrorCode::JobDuplicated,
         QueueError::DuplicateBatchId => ErrorCode::BatchDuplicated,
+        QueueError::InvalidMessage => ErrorCode::InvalidMessage,
     };
 
     ServerMessage::Error {
@@ -612,7 +613,16 @@ fn job_validation_error_response(
         | JobValidationError::RawCopiesNotAllowed
         | JobValidationError::MissingFileUrl
         | JobValidationError::FileRawDataNotAllowed
-        | JobValidationError::InvalidRawData => ErrorCode::InvalidMessage,
+        | JobValidationError::InvalidRawData
+        | JobValidationError::MissingHtmlFileUrl
+        | JobValidationError::InvalidHtmlFileUrl
+        | JobValidationError::HtmlInlineNotAllowed
+        | JobValidationError::MissingRawHtml
+        | JobValidationError::RawHtmlFileUrlNotAllowed
+        | JobValidationError::HtmlDataBase64NotAllowed
+        | JobValidationError::NonHtmlHtmlNotAllowed
+        | JobValidationError::NonHtmlWaitNotAllowed
+        | JobValidationError::HtmlWaitOutOfRange => ErrorCode::InvalidMessage,
     };
 
     ServerMessage::Error {
@@ -724,7 +734,8 @@ mod tests {
             PaperInfo, PrintBackend, PrintOptions, PrintResult, PrintSubmission, PrinterInfo,
             RawPrintOptions,
         },
-        protocol::{ErrorCode, JobStatus, ServerMessage},
+        protocol::{ErrorCode, JobStatus, JobValidationError, ServerMessage},
+        queue::QueueError,
         server::{configured_addr, health, is_client_ip_allowed_for_state, is_ws_origin_allowed},
     };
     use axum::{
@@ -757,6 +768,27 @@ mod tests {
     #[test]
     fn router_builds_with_app_state() {
         let _router = super::router(AppState::new(AgentConfig::default()));
+    }
+
+    #[test]
+    fn html_source_validation_errors_map_to_invalid_message() {
+        assert!(matches!(
+            super::job_validation_error_response(
+                Some("request-1".to_string()),
+                JobValidationError::InvalidHtmlFileUrl,
+            ),
+            ServerMessage::Error {
+                error_code: ErrorCode::InvalidMessage,
+                ..
+            }
+        ));
+        assert!(matches!(
+            super::queue_error_response(Some("request-1".to_string()), QueueError::InvalidMessage),
+            ServerMessage::Error {
+                error_code: ErrorCode::InvalidMessage,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -1141,6 +1173,8 @@ mod tests {
                     printer_name: None,
                     file_url: Some("https://example.com/label.pdf".to_string()),
                     data_base64: None,
+                    html: None,
+                    wait_ms: None,
                     copies: Some(1),
                     paper: None,
                 },

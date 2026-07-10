@@ -5,6 +5,9 @@ use std::{fmt, str::FromStr};
 use thiserror::Error;
 use url::Url;
 
+pub const DEFAULT_HTML_WAIT_MS: u64 = 1_000;
+pub const MAX_HTML_WAIT_MS: u64 = 30_000;
+
 /// 浏览器侧打印任务可提交的文件格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -18,6 +21,9 @@ pub enum SupportedFormat {
     Xlsx,
     Pptx,
     Raw,
+    Html,
+    #[serde(rename = "raw-html")]
+    RawHtml,
 }
 
 /// 字符串无法解析为支持格式时返回的错误。
@@ -48,6 +54,8 @@ impl FromStr for SupportedFormat {
             "xlsx" => Ok(Self::Xlsx),
             "pptx" => Ok(Self::Pptx),
             "raw" => Ok(Self::Raw),
+            "html" => Ok(Self::Html),
+            "raw-html" => Ok(Self::RawHtml),
             _ => Err(ParseSupportedFormatError),
         }
     }
@@ -87,6 +95,24 @@ pub enum JobValidationError {
     InvalidRawData,
     #[error("file too large")]
     FileTooLarge,
+    #[error("html job requires file_url")]
+    MissingHtmlFileUrl,
+    #[error("html job file_url must be an absolute http or https url")]
+    InvalidHtmlFileUrl,
+    #[error("html job does not accept inline html")]
+    HtmlInlineNotAllowed,
+    #[error("raw-html job requires html")]
+    MissingRawHtml,
+    #[error("raw-html job does not accept file_url")]
+    RawHtmlFileUrlNotAllowed,
+    #[error("html jobs do not accept data_base64")]
+    HtmlDataBase64NotAllowed,
+    #[error("non-html job does not accept html")]
+    NonHtmlHtmlNotAllowed,
+    #[error("non-html job does not accept wait_ms")]
+    NonHtmlWaitNotAllowed,
+    #[error("html wait_ms must be between 0 and 30000")]
+    HtmlWaitOutOfRange,
 }
 
 /// 任务和配置合并后的纸张尺寸。
@@ -119,6 +145,10 @@ pub struct PrintJobInput {
     #[serde(default)]
     pub data_base64: Option<String>,
     #[serde(default)]
+    pub html: Option<String>,
+    #[serde(default)]
+    pub wait_ms: Option<u64>,
+    #[serde(default)]
     pub copies: Option<u16>,
     #[serde(default)]
     pub paper: Option<EffectivePaper>,
@@ -137,6 +167,8 @@ impl PrintJobInput {
             | SupportedFormat::Docx
             | SupportedFormat::Xlsx
             | SupportedFormat::Pptx => self.validate_file_job(),
+            SupportedFormat::Html => self.validate_html_file_job(),
+            SupportedFormat::RawHtml => self.validate_raw_html(max_file_size_mb),
         }
     }
 
@@ -150,6 +182,7 @@ impl PrintJobInput {
         if self.copies.is_some() {
             return Err(JobValidationError::RawCopiesNotAllowed);
         }
+        self.validate_non_html_fields()?;
 
         let data_base64 = self
             .data_base64
@@ -178,6 +211,66 @@ impl PrintJobInput {
         }
         if self.data_base64.is_some() {
             return Err(JobValidationError::FileRawDataNotAllowed);
+        }
+        self.validate_non_html_fields()?;
+
+        Ok(())
+    }
+
+    /// 校验仅 HTML 作业才能携带的字段未出现在其他格式中。
+    fn validate_non_html_fields(&self) -> Result<(), JobValidationError> {
+        if self.html.is_some() {
+            return Err(JobValidationError::NonHtmlHtmlNotAllowed);
+        }
+        if self.wait_ms.is_some() {
+            return Err(JobValidationError::NonHtmlWaitNotAllowed);
+        }
+
+        Ok(())
+    }
+
+    /// 校验通过 URL 访问的 HTML 作业字段组合。
+    fn validate_html_file_job(&self) -> Result<(), JobValidationError> {
+        let file_url = self
+            .file_url
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or(JobValidationError::MissingHtmlFileUrl)?;
+        validate_html_file_url(file_url).map_err(|_| JobValidationError::InvalidHtmlFileUrl)?;
+        if self.html.is_some() {
+            return Err(JobValidationError::HtmlInlineNotAllowed);
+        }
+        if self.data_base64.is_some() {
+            return Err(JobValidationError::HtmlDataBase64NotAllowed);
+        }
+        self.validate_html_wait()
+    }
+
+    /// 校验直接携带 HTML 文本的作业字段组合。
+    fn validate_raw_html(&self, max_file_size_mb: u64) -> Result<(), JobValidationError> {
+        if self.file_url.is_some() {
+            return Err(JobValidationError::RawHtmlFileUrlNotAllowed);
+        }
+        if self.data_base64.is_some() {
+            return Err(JobValidationError::HtmlDataBase64NotAllowed);
+        }
+        let html = self
+            .html
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(JobValidationError::MissingRawHtml)?;
+        let max_bytes = max_file_size_mb.saturating_mul(1024 * 1024);
+        if html.len() as u64 > max_bytes {
+            return Err(JobValidationError::FileTooLarge);
+        }
+
+        self.validate_html_wait()
+    }
+
+    /// 校验 HTML 页面渲染前允许的等待时间。
+    fn validate_html_wait(&self) -> Result<(), JobValidationError> {
+        if matches!(self.wait_ms, Some(wait_ms) if wait_ms > MAX_HTML_WAIT_MS) {
+            return Err(JobValidationError::HtmlWaitOutOfRange);
         }
 
         Ok(())
@@ -344,6 +437,22 @@ pub fn validate_file_url(value: &str) -> Result<Url, ProtocolError> {
     }
 }
 
+/// 校验 HTML 页面 URL 必须是带 authority 的绝对 HTTP(S) 地址。
+///
+/// 主机名和 IP 是否可访问由渲染时的 `ResourcePolicy` 继续判断。
+pub fn validate_html_file_url(value: &str) -> Result<Url, ProtocolError> {
+    let url = Url::parse(value).map_err(|_| ProtocolError::InvalidFileUrl)?;
+
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(ProtocolError::UnsupportedFileUrlScheme);
+    }
+    if url.host_str().is_none() {
+        return Err(ProtocolError::InvalidFileUrl);
+    }
+
+    Ok(url)
+}
+
 /// 判断 file_url 是否是 PrintBridge 接受的 base64 PDF data URL。
 pub fn is_pdf_data_url(value: &str) -> bool {
     let Some(payload) = value.strip_prefix("data:") else {
@@ -441,6 +550,8 @@ mod tests {
             printer_name: None,
             file_url: Some("https://example.com/raw.bin".to_string()),
             data_base64: Some("XlhB".to_string()),
+            html: None,
+            wait_ms: None,
             copies: None,
             paper: None,
         };

@@ -40,6 +40,8 @@ Raw mode can carry ESC/POS, TSPL, TSPL2, ZPL, EPL, PCL, PostScript, and similar 
 
 Raw tasks do not support `file_url`, `paper`, or `copies`. If the business workflow needs multiple raw outputs, generate multiple raw command payloads or send multiple jobs.
 
+HTML mode supports `html` and `raw-html`: the local Agent downloads and renders the URL page for the former, and renders caller-provided HTML text for the latter. Both are converted to a temporary PDF before entering the normal PDF print flow.
+
 ## Development
 
 Install dependencies:
@@ -548,6 +550,62 @@ Office task:
 ```
 
 Office file formats include `docx`, `xlsx`, and `pptx`. The local service converts the file to a temporary PDF before entering the PDF printing flow. Office tasks only support HTTP(S) `file_url`; data URLs are not supported.
+
+HTML URL task:
+
+```json
+{
+  "type": "print",
+  "request_id": "REQ-HTML-001",
+  "job_id": "JOB-HTML-001",
+  "format": "html",
+  "file_url": "https://example.com/invoice/1",
+  "wait_ms": 1000,
+  "copies": 1,
+  "paper": {
+    "width_mm": 210,
+    "height_mm": 297
+  }
+}
+```
+
+Inline HTML task:
+
+```json
+{
+  "type": "print",
+  "request_id": "REQ-RAW-HTML-001",
+  "job_id": "JOB-RAW-HTML-001",
+  "format": "raw-html",
+  "html": "<main><h1>Invoice</h1></main>",
+  "wait_ms": 1000,
+  "copies": 1,
+  "paper": {
+    "width_mm": 210,
+    "height_mm": 297
+  }
+}
+```
+
+`html` requires an HTTP(S) `file_url` and does not accept inline `html` or `data_base64`; `raw-html` requires a non-empty `html` and does not accept `file_url` or `data_base64`. Both HTML task types accept `wait_ms` from 0 to 30000 milliseconds and support `copies` and `paper`.
+
+The browser JSSDK uses `fileUrl` and `waitMs` and only serializes protocol fields. The local Agent downloads, renders, and prints HTML as PDF. The HTML page and every loaded resource, including CSS, images, and scripts, may use only public HTTP/HTTPS addresses; `file:`, local, and private-network addresses are rejected.
+
+### HTML Rendering Prerequisites and Timeout Boundary
+
+HTML rendering does not bundle a browser. Every platform and runtime mode requires an installed Chromium-family browser; native WebView fallbacks are not provided:
+
+| Platform | Browser renderer |
+| --- | --- |
+| Windows | Edge → Chrome → Chromium |
+| macOS | Chrome → Chromium |
+| Linux | Chrome → Chromium |
+
+Both the GUI and `print-bridge serve`, including systemd/launchd-managed service deployments, follow this requirement. Without a usable browser, an HTML task returns a renderer-unavailable (`RendererUnavailable`) failure.
+
+The proxy still safely blocks a rejected resource without `Referer` or `Origin`; however, it cannot reliably associate that request with the current HTML page. Task history may therefore omit `BlockedResource`, and the resulting PDF may omit that resource.
+
+Rendering uses cooperative cancellation at a total deadline: after timeout it does not start later browser stages; an already-started synchronous browser operation returns through its own bounded wait before resources are cleaned up. It does not promise immediate cross-process termination.
 
 Raw task:
 

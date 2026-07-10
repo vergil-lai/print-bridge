@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @font-face {
+        font-family: "PrintBridgeSmoke";
+        src: local("Arial");
+      }
+
+      body {
+        color: #123c69;
+        font-family: "PrintBridgeSmoke", sans-serif;
+      }
+
+      .label {
+        border: 3px solid #f59e0b;
+        padding: 12px;
+      }
+
+      img {
+        height: 24px;
+        vertical-align: middle;
+        width: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="label">
+      <img
+        alt="PrintBridge smoke mark"
+        src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Crect width='24' height='24' fill='%23f59e0b'/%3E%3C/svg%3E"
+      />
+      <span id="render-state">waiting for JavaScript</span>
+    </main>
+    <script>
+      setTimeout(() => {
+        document.getElementById('render-state').textContent = 'JavaScript completed before print';
+      }, 30);
+    </script>
+  </body>
+</html>
