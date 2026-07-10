@@ -75,6 +75,7 @@ PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https:
 - macOS/Linux：需要安装 LibreOffice，并确保系统能够调用 `soffice` 或 `libreoffice`。
 
 PrintBridge 不内置 Office 转换器。缺少对应软件、转换失败或转换超过 120 秒时，该 Office 打印任务会失败。
+Windows 发生转换超时时，只会清理该任务启动的 Office 实例，不会关闭用户已经打开的 Word、Excel 或 PowerPoint。
 
 首次运行后，在 PrintBridge 设置界面完成：
 

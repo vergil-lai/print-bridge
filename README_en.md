@@ -75,6 +75,7 @@ Printing Office files also requires locally installed conversion software:
 - macOS/Linux: install LibreOffice and make `soffice` or `libreoffice` available to the system.
 
 PrintBridge does not bundle an Office converter. The Office print job fails when the required software is unavailable, conversion fails, or conversion exceeds 120 seconds.
+When a Windows conversion times out, PrintBridge only cleans up the Office instance started for that task; it does not close Word, Excel, or PowerPoint sessions already opened by the user.
 
 After first launch, configure PrintBridge in the settings UI:
 
