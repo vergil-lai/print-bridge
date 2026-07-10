@@ -425,10 +425,6 @@ async fn submit_pdf_and_track(
         state.printing.print_pdf(pdf_path, options)
     };
 
-    // 图片和 Office 输入会生成第二个临时 PDF，原始 PDF 则复用下载路径。
-    if printable_path != downloaded_path {
-        cleanup_file(&printable_path).await;
-    }
     let submission = print_result?;
     push_log_with_metadata(
         state,
