@@ -4,9 +4,10 @@ use crate::{
     config::{
         cli_config_path, cli_data_dir, cli_remote_store_path, cli_task_history_path, AgentConfig,
     },
+    html::{browser::BrowserHtmlRenderer, resource_policy::ResourcePolicy},
     printing, queue, remote_store, remote_worker, server, task_history,
 };
-use std::{io, net::SocketAddr, path::PathBuf};
+use std::{io, net::SocketAddr, path::PathBuf, sync::Arc};
 use thiserror::Error;
 
 /// Headless serve 启动后可输出给终端的运行信息。
@@ -94,11 +95,14 @@ fn build_headless_state(
 ) -> Result<AppState, HeadlessRuntimeError> {
     let remote_store = remote_store::RemoteStore::open(&cli_remote_store_path()?)?;
     let task_history = task_history::TaskHistoryStore::open(&cli_task_history_path()?)?;
-    Ok(
-        AppState::with_config_path_and_printing(config, config_path, printing::default_backend())
-            .with_remote_store(remote_store)
-            .with_task_history_store(task_history),
+    Ok(AppState::with_config_path_printing_and_html_renderer(
+        config,
+        config_path,
+        printing::default_backend(),
+        Arc::new(BrowserHtmlRenderer::new(ResourcePolicy::system())),
     )
+    .with_remote_store(remote_store)
+    .with_task_history_store(task_history))
 }
 
 /// 格式化 headless serve 启动信息。

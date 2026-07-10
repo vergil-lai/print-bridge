@@ -73,7 +73,7 @@ impl ServeServiceManager for PlatformServeServiceManager {
 
         #[cfg(target_os = "macos")]
         {
-            return install_macos_launch_agent();
+            install_macos_launch_agent()
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -90,7 +90,7 @@ impl ServeServiceManager for PlatformServeServiceManager {
 
         #[cfg(target_os = "macos")]
         {
-            return uninstall_macos_launch_agent();
+            uninstall_macos_launch_agent()
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]

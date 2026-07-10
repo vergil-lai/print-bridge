@@ -21,6 +21,7 @@ PrintBridge does not replace printer drivers and does not bypass the operating s
 - Website allowlist (Origin allowlist) to control which web pages may connect, for example `https://example.com`
 - IP allowlist to control which client addresses may access the local service, with single IP and CIDR support
 - Supports PDF, PNG/JPEG images, and Office(.docx/.xlsx/.pptx) files
+- Supports HTML pages: `html` uses a URL and `raw-html` uses inline HTML text
 - Supports raw printer commands and submits ESC/POS, TSPL, ZPL, EPL, PCL, and similar device commands as-is
 - Allows each task to specify a printer; falls back to the configured default printer when omitted
 - Uses a serial print queue to avoid concurrent jobs competing for the same printer
@@ -41,6 +42,46 @@ This is useful when the business system creates tasks and expects a specific loc
 PrintBridge supports raw printer commands. Your business system can generate ESC/POS, TSPL, ZPL, EPL, PCL, PostScript, or other device commands, and PrintBridge will submit the bytes to the system print queue as-is.
 
 This is useful for label printers, receipt printers, and industrial printing devices. PrintBridge does not parse these device languages and does not generate labels, receipts, or RFID commands for you.
+
+## HTML Printing
+
+`html` prints an HTML page at a public URL and requires an HTTP(S) `file_url`; `raw-html` prints inline HTML and requires a non-empty `html` field with no `file_url`. Both HTML task types support `wait_ms` (0 to 30000 milliseconds), `copies`, and `paper`:
+
+```json
+{
+  "type": "print",
+  "job_id": "JOB-HTML-001",
+  "format": "html",
+  "file_url": "https://example.com/invoice/1",
+  "wait_ms": 1000,
+  "copies": 1,
+  "paper": { "width_mm": 210, "height_mm": 297 }
+}
+```
+
+```json
+{
+  "type": "print",
+  "job_id": "JOB-RAW-HTML-001",
+  "format": "raw-html",
+  "html": "<main><h1>Invoice</h1></main>",
+  "wait_ms": 1000,
+  "copies": 1,
+  "paper": { "width_mm": 210, "height_mm": 297 }
+}
+```
+
+The browser JSSDK uses camelCase `fileUrl` and `waitMs` and only serializes the task. The local Agent renders HTML to PDF before printing. HTML pages and their loaded resources may access only public HTTP/HTTPS addresses; local, private-network, and `file:` resources are rejected.
+
+HTML rendering does not bundle a browser. Every platform and runtime mode requires an installed Chromium-family browser; native WebView fallbacks are not provided:
+
+| Platform | Browser renderer |
+| --- | --- |
+| Windows | Edge → Chrome → Chromium |
+| macOS | Chrome → Chromium |
+| Linux | Chrome → Chromium |
+
+Both the GUI and `print-bridge serve`, including systemd/launchd-managed service deployments, follow this requirement. Without a usable browser, an HTML task fails with renderer-unavailable (`RendererUnavailable`).
 
 ## Difference From Traditional Web Printing Controls
 

@@ -11,6 +11,8 @@ fn job(job_id: &str) -> PrintJobInput {
         printer_name: None,
         file_url: Some(format!("https://example.com/{job_id}.pdf")),
         data_base64: None,
+        html: None,
+        wait_ms: None,
         copies: Some(1),
         paper: None,
     }
@@ -92,6 +94,38 @@ fn single_job_enqueue_preserves_request_id_without_batch_id() {
     assert_eq!(queued.request_id, "request-1");
     assert_eq!(queued.batch_id, None);
     assert_eq!(queued.job.job_id, "job-1");
+    assert!(queue.pop_next().is_none());
+}
+
+#[test]
+fn queue_rejects_html_jobs_with_non_http_sources() {
+    let mut queue = QueueState::default();
+    let mut html = job("html-file");
+    html.format = SupportedFormat::Html;
+    html.file_url = Some("file:///tmp/invoice.html".to_string());
+
+    assert_eq!(
+        queue.accept_job("request-1".to_string(), html),
+        Err(QueueError::InvalidMessage)
+    );
+    assert!(queue.pop_next().is_none());
+}
+
+#[test]
+fn queue_rejects_html_data_url_in_batch_without_accepting_any_job() {
+    let mut queue = QueueState::default();
+    let mut html = job("html-data");
+    html.format = SupportedFormat::Html;
+    html.file_url = Some("data:text/html,<main>invoice</main>".to_string());
+
+    assert_eq!(
+        queue.accept_batch(
+            "request-1".to_string(),
+            "batch-1".to_string(),
+            vec![job("pdf-1"), html],
+        ),
+        Err(QueueError::InvalidMessage)
+    );
     assert!(queue.pop_next().is_none());
 }
 

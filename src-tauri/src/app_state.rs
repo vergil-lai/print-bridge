@@ -1,5 +1,6 @@
 use crate::{
     config::{AgentConfig, MIN_REMOTE_MAX_REPORT_RETRIES, MIN_REMOTE_POLL_INTERVAL_SECONDS},
+    html::{browser::BrowserHtmlRenderer, resource_policy::ResourcePolicy, HtmlRenderer},
     ip_whitelist::validate_allowed_ip_entry,
     logs::LogStore,
     logs::TaskLogEntry,
@@ -26,6 +27,7 @@ pub struct AppState {
     pub remote_notify: Arc<Notify>,
     pub print_lock: Arc<Mutex<()>>,
     pub printing: Arc<dyn PrintBackend + Send + Sync>,
+    pub html_renderer: Arc<dyn HtmlRenderer>,
     pub remote_store: Option<Arc<RemoteStore>>,
     pub task_history: Option<Arc<TaskHistoryStore>>,
 }
@@ -38,7 +40,7 @@ impl AppState {
 
     /// 创建会把配置持久化到指定路径的应用状态。
     pub fn with_config_path(config: AgentConfig, config_path: PathBuf) -> Self {
-        Self::with_printing_and_config_path(config, default_backend(), Some(config_path))
+        Self::with_config_path_and_printing(config, config_path, default_backend())
     }
 
     /// 使用注入的打印后端创建可持久化的应用状态。
@@ -47,7 +49,12 @@ impl AppState {
         config_path: PathBuf,
         printing: Box<dyn PrintBackend + Send + Sync>,
     ) -> Self {
-        Self::with_printing_and_config_path(config, printing, Some(config_path))
+        Self::with_config_path_printing_and_html_renderer(
+            config,
+            config_path,
+            printing,
+            default_html_renderer(),
+        )
     }
 
     /// 使用注入的打印后端创建不绑定配置文件的应用状态。
@@ -55,13 +62,33 @@ impl AppState {
         config: AgentConfig,
         printing: Box<dyn PrintBackend + Send + Sync>,
     ) -> Self {
-        Self::with_printing_and_config_path(config, printing, None)
+        Self::with_printing_and_html_renderer(config, printing, default_html_renderer())
+    }
+
+    /// 使用注入的打印和 HTML 渲染后端创建不绑定配置文件的应用状态。
+    pub fn with_printing_and_html_renderer(
+        config: AgentConfig,
+        printing: Box<dyn PrintBackend + Send + Sync>,
+        html_renderer: Arc<dyn HtmlRenderer>,
+    ) -> Self {
+        Self::with_printing_and_config_path(config, printing, html_renderer, None)
+    }
+
+    /// 使用注入的打印和 HTML 渲染后端创建可持久化的应用状态。
+    pub fn with_config_path_printing_and_html_renderer(
+        config: AgentConfig,
+        config_path: PathBuf,
+        printing: Box<dyn PrintBackend + Send + Sync>,
+        html_renderer: Arc<dyn HtmlRenderer>,
+    ) -> Self {
+        Self::with_printing_and_config_path(config, printing, html_renderer, Some(config_path))
     }
 
     /// 构造所有公开构造函数共用的状态容器。
     fn with_printing_and_config_path(
         config: AgentConfig,
         printing: Box<dyn PrintBackend + Send + Sync>,
+        html_renderer: Arc<dyn HtmlRenderer>,
         config_path: Option<PathBuf>,
     ) -> Self {
         let (status_events, _) = broadcast::channel(STATUS_EVENT_CAPACITY);
@@ -75,6 +102,7 @@ impl AppState {
             remote_notify: Arc::new(Notify::new()),
             print_lock: Arc::new(Mutex::new(())),
             printing: Arc::from(printing),
+            html_renderer,
             remote_store: None,
             task_history: None,
         }
@@ -134,6 +162,10 @@ impl AppState {
     pub fn broadcast_status(&self, entry: TaskLogEntry) {
         let _ = self.status_events.send(entry);
     }
+}
+
+fn default_html_renderer() -> Arc<dyn HtmlRenderer> {
+    Arc::new(BrowserHtmlRenderer::new(ResourcePolicy::system()))
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ use crate::{
     config::AgentConfig,
     document::{detect_format, image_to_pdf, DocumentError, DocumentFormat},
     download::{download_to_temp, DownloadError},
+    html::{HtmlRenderError, HtmlRenderRequest, HtmlSource},
     logs::TaskLogEntry,
     office::{
         detect_office_format, office_format_from_supported, office_to_pdf, OfficeConvertError,
@@ -11,7 +12,10 @@ use crate::{
     printing::{
         paper_name, PaperInfo, PrintError, PrintOptions, PrintTrackingOutcome, RawPrintOptions,
     },
-    protocol::{EffectivePaper, JobStatus, PrintJobInput, SupportedFormat},
+    protocol::{
+        validate_html_file_url, EffectivePaper, JobStatus, PrintJobInput, SupportedFormat,
+        DEFAULT_HTML_WAIT_MS,
+    },
     remote_store::{NewRemoteStatusEvent, RemoteReportStatus},
     task_history::{NewTaskHistoryEvent, TaskHistorySource, TaskHistoryStatus},
 };
@@ -23,6 +27,7 @@ use std::{
 };
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use uuid::Uuid;
 
 /// 已进入本地 FIFO 队列的打印任务。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,6 +46,8 @@ pub enum QueueError {
     DuplicateJobId,
     #[error("duplicate batch id")]
     DuplicateBatchId,
+    #[error("invalid message")]
+    InvalidMessage,
 }
 
 /// 内存队列状态，以及任务和批次的重复保护。
@@ -78,6 +85,7 @@ impl QueueState {
 
     /// 把一个已构造的队列任务推入 FIFO 队列。
     fn accept_queued_job(&mut self, queued_job: QueuedJob) -> Result<(), QueueError> {
+        validate_html_source(&queued_job.job)?;
         if self.seen_job_ids.contains(&queued_job.job.job_id) {
             return Err(QueueError::DuplicateJobId);
         }
@@ -114,6 +122,9 @@ impl QueueState {
         jobs: Vec<PrintJobInput>,
         remote: bool,
     ) -> Result<(), QueueError> {
+        for job in &jobs {
+            validate_html_source(job)?;
+        }
         if self.seen_batch_ids.contains(&batch_id) {
             return Err(QueueError::DuplicateBatchId);
         }
@@ -151,6 +162,21 @@ impl QueueState {
     }
 }
 
+/// 不允许队列持有会绕过 HTML 资源策略的 URL 来源。
+fn validate_html_source(job: &PrintJobInput) -> Result<(), QueueError> {
+    if job.format != SupportedFormat::Html {
+        return Ok(());
+    }
+
+    let file_url = job
+        .file_url
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or(QueueError::InvalidMessage)?;
+    validate_html_file_url(file_url).map_err(|_| QueueError::InvalidMessage)?;
+    Ok(())
+}
+
 /// 转换为状态日志前的 worker 内部错误。
 #[derive(Debug, Error)]
 enum ProcessJobError {
@@ -177,6 +203,8 @@ enum ProcessJobError {
     Document(#[from] DocumentError),
     #[error("{0}")]
     OfficeConvert(#[from] OfficeConvertError),
+    #[error("HTML rendering failed: {0}")]
+    Html(#[from] HtmlRenderError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("print failed: {0}")]
@@ -212,6 +240,14 @@ async fn process_job_inner(
     queued_job: &QueuedJob,
 ) -> Result<(), ProcessJobError> {
     let config = state.config.read().await.clone();
+    if matches!(
+        queued_job.job.format,
+        SupportedFormat::Html | SupportedFormat::RawHtml
+    ) {
+        let options = resolve_print_options(queued_job, &config)?;
+        return print_html_job(state, queued_job, &options).await;
+    }
+
     if queued_job.job.format == SupportedFormat::Raw {
         let options = resolve_raw_print_options(queued_job, &config)?;
         return print_raw_job(state, queued_job, &options, &config).await;
@@ -291,6 +327,64 @@ async fn print_raw_job(
     Ok(())
 }
 
+/// 渲染 HTML 作业为临时 PDF，并复用现有 PDF 提交和状态追踪流程。
+async fn print_html_job(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    options: &PrintOptions,
+) -> Result<(), ProcessJobError> {
+    let source = match queued_job.job.format {
+        SupportedFormat::Html => {
+            let file_url = queued_job.job.file_url.as_deref().ok_or_else(|| {
+                ProcessJobError::InvalidMessage("html job requires file_url".to_string())
+            })?;
+            HtmlSource::Url(validate_html_file_url(file_url).map_err(|error| {
+                ProcessJobError::InvalidMessage(format!("invalid html file_url: {error}"))
+            })?)
+        }
+        SupportedFormat::RawHtml => {
+            HtmlSource::Inline(queued_job.job.html.clone().ok_or_else(|| {
+                ProcessJobError::InvalidMessage("raw-html job requires html".to_string())
+            })?)
+        }
+        _ => return Err(ProcessJobError::UnsupportedFormat),
+    };
+    let output_path =
+        std::env::temp_dir().join(format!("print-bridge-html-{}.pdf", Uuid::new_v4()));
+    let request = HtmlRenderRequest {
+        source,
+        paper: queued_job.job.paper.clone().unwrap_or(EffectivePaper {
+            width_mm: options.paper.width_mm,
+            height_mm: options.paper.height_mm,
+        }),
+        wait_ms: queued_job.job.wait_ms.unwrap_or(DEFAULT_HTML_WAIT_MS),
+        output_path: output_path.clone(),
+    };
+
+    let render_result = state.html_renderer.render(request).await;
+    let rendered = match render_result {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            cleanup_file(&output_path).await;
+            return Err(error.into());
+        }
+    };
+    push_log_with_metadata(
+        state,
+        queued_job,
+        JobStatus::Printing,
+        &format!("rendering html with {}", rendered.renderer),
+        Some(options),
+    )
+    .await;
+    let result = submit_pdf_and_track(state, queued_job, options, &rendered.output_path).await;
+    cleanup_file(&rendered.output_path).await;
+    if rendered.output_path != output_path {
+        cleanup_file(&output_path).await;
+    }
+    result
+}
+
 /// 必要时转换下载文件，并提交给打印后端。
 async fn print_downloaded_file(
     state: &AppState,
@@ -301,6 +395,23 @@ async fn print_downloaded_file(
     let printable_path =
         prepare_printable_pdf(downloaded_path, queued_job.job.format, &options.paper).await?;
 
+    let result = submit_pdf_and_track(state, queued_job, options, &printable_path).await;
+
+    // 转换后的图片会生成第二个临时 PDF，原始 PDF 则复用下载路径。
+    if printable_path != downloaded_path {
+        cleanup_file(&printable_path).await;
+    }
+
+    result
+}
+
+/// 把 PDF 提交给系统打印队列，并复用既有状态追踪和历史记录逻辑。
+async fn submit_pdf_and_track(
+    state: &AppState,
+    queued_job: &QueuedJob,
+    options: &PrintOptions,
+    pdf_path: &Path,
+) -> Result<(), ProcessJobError> {
     push_log_with_metadata(
         state,
         queued_job,
@@ -311,14 +422,13 @@ async fn print_downloaded_file(
     .await;
     let print_result = {
         let _print_guard = state.print_lock.lock().await;
-        state.printing.print_pdf(&printable_path, options)
+        state.printing.print_pdf(pdf_path, options)
     };
 
     // 图片和 Office 输入会生成第二个临时 PDF，原始 PDF 则复用下载路径。
     if printable_path != downloaded_path {
         cleanup_file(&printable_path).await;
     }
-
     let submission = print_result?;
     push_log_with_metadata(
         state,
@@ -496,6 +606,8 @@ fn supported_format_name(format: SupportedFormat) -> &'static str {
         SupportedFormat::Xlsx => "xlsx",
         SupportedFormat::Pptx => "pptx",
         SupportedFormat::Raw => "raw",
+        SupportedFormat::Html => "html",
+        SupportedFormat::RawHtml => "raw-html",
     }
 }
 
@@ -769,6 +881,10 @@ mod worker_tests {
     use crate::{
         app_state::AppState,
         config::{AgentConfig, PrintingConfig},
+        html::{
+            HtmlRenderError, HtmlRenderFuture, HtmlRenderRequest, HtmlRenderResult, HtmlRenderer,
+            HtmlSource,
+        },
         printing::{
             PaperInfo, PrintBackend, PrintOptions, PrintResult, PrintSubmission,
             PrintTrackingOutcome, PrinterInfo, RawPrintOptions,
@@ -865,6 +981,154 @@ mod worker_tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].data, b"hello");
         assert_eq!(calls[0].options.printer_name, "Printer A");
+    }
+
+    #[tokio::test]
+    async fn process_html_url_renders_then_submits_pdf_and_cleans_up() {
+        let renderer = FakeHtmlRenderer::default();
+        let render_calls = renderer.calls.clone();
+        let backend = MockPrintBackend::default();
+        let print_calls = backend.calls.clone();
+        let state = AppState::with_printing_and_html_renderer(
+            config_with_defaults(Some(default_paper())),
+            Box::new(backend),
+            Arc::new(renderer),
+        );
+        let queued = queued_job(job_with(
+            "html-url-job",
+            SupportedFormat::Html,
+            "https://example.com/label",
+            3,
+            None,
+        ));
+
+        process_job(&state, queued).await;
+
+        {
+            let requests = render_calls.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(matches!(requests[0].source, HtmlSource::Url(_)));
+            assert_eq!(requests[0].wait_ms, crate::protocol::DEFAULT_HTML_WAIT_MS);
+            assert_eq!(requests[0].paper, default_paper());
+            assert!(!requests[0].output_path.exists());
+        }
+
+        {
+            let calls = print_calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].options.copies, 3);
+            assert_eq!(calls[0].options.paper.width_mm, 80.0);
+            assert!(calls[0].path_bytes.starts_with(b"%PDF-"));
+            assert!(!calls[0].path.exists());
+        }
+
+        let logs = state.logs.lock().await.recent();
+        assert!(logs
+            .iter()
+            .any(|entry| entry.message == "rendering html with fake-html"));
+        assert!(logs
+            .iter()
+            .any(|entry| entry.status == JobStatus::Submitted));
+    }
+
+    #[tokio::test]
+    async fn process_raw_html_uses_inline_source_and_wait_override() {
+        let renderer = FakeHtmlRenderer::default();
+        let render_calls = renderer.calls.clone();
+        let backend = MockPrintBackend::default();
+        let print_calls = backend.calls.clone();
+        let state = AppState::with_printing_and_html_renderer(
+            config_with_defaults(Some(default_paper())),
+            Box::new(backend),
+            Arc::new(renderer),
+        );
+        let mut job = job_with("raw-html-job", SupportedFormat::RawHtml, "", 2, None);
+        job.file_url = None;
+        job.html = Some("<h1>Label</h1>".to_string());
+        job.wait_ms = Some(2_400);
+
+        process_job(&state, queued_job(job)).await;
+
+        let requests = render_calls.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(
+            &requests[0].source,
+            HtmlSource::Inline(html) if html == "<h1>Label</h1>"
+        ));
+        assert_eq!(requests[0].wait_ms, 2_400);
+        drop(requests);
+        assert_eq!(print_calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn process_html_render_failure_cleans_up_pdf_and_logs_failure() {
+        let renderer = FakeHtmlRenderer {
+            fail_after_write: true,
+            ..FakeHtmlRenderer::default()
+        };
+        let render_calls = renderer.calls.clone();
+        let backend = MockPrintBackend::default();
+        let print_calls = backend.calls.clone();
+        let state = AppState::with_printing_and_html_renderer(
+            config_with_defaults(Some(default_paper())),
+            Box::new(backend),
+            Arc::new(renderer),
+        );
+        let queued = queued_job(job_with(
+            "html-render-failure",
+            SupportedFormat::Html,
+            "https://example.com/fails",
+            1,
+            None,
+        ));
+
+        process_job(&state, queued).await;
+
+        {
+            let requests = render_calls.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(!requests[0].output_path.exists());
+        }
+        assert!(print_calls.lock().unwrap().is_empty());
+        let logs = state.logs.lock().await.recent();
+        assert!(logs.iter().any(|entry| {
+            entry.status == JobStatus::Failed && entry.message.contains("fake render failed")
+        }));
+    }
+
+    #[tokio::test]
+    async fn process_html_submission_failure_cleans_up_pdf() {
+        let renderer = FakeHtmlRenderer::default();
+        let render_calls = renderer.calls.clone();
+        let backend = MockPrintBackend {
+            print_error: true,
+            ..MockPrintBackend::default()
+        };
+        let state = AppState::with_printing_and_html_renderer(
+            config_with_defaults(Some(default_paper())),
+            Box::new(backend),
+            Arc::new(renderer),
+        );
+        let queued = queued_job(job_with(
+            "html-submission-failure",
+            SupportedFormat::Html,
+            "https://example.com/submit-fails",
+            1,
+            None,
+        ));
+
+        process_job(&state, queued).await;
+
+        {
+            let requests = render_calls.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(!requests[0].output_path.exists());
+        }
+        let logs = state.logs.lock().await.recent();
+        assert!(logs.iter().any(|entry| {
+            entry.status == JobStatus::Failed
+                && entry.message.contains("fake print submission failed")
+        }));
     }
 
     #[tokio::test]
@@ -1273,6 +1537,7 @@ mod worker_tests {
         calls: Arc<Mutex<Vec<PrintCall>>>,
         raw_calls: Arc<Mutex<Vec<RawPrintCall>>>,
         tracking_outcome: Option<PrintTrackingOutcome>,
+        print_error: bool,
     }
 
     struct PrintCall {
@@ -1301,6 +1566,12 @@ mod worker_tests {
                 path_bytes: fs::read(path).unwrap(),
                 options: options.clone(),
             });
+            if self.print_error {
+                return Err(crate::printing::PrintError::CommandFailed {
+                    command: "fake-print".to_string(),
+                    message: "fake print submission failed".to_string(),
+                });
+            }
             Ok(mock_submission())
         }
 
@@ -1360,6 +1631,8 @@ mod worker_tests {
             printer_name: None,
             file_url: Some(file_url.to_string()),
             data_base64: None,
+            html: None,
+            wait_ms: None,
             copies: Some(copies),
             paper,
         }
@@ -1372,8 +1645,36 @@ mod worker_tests {
             printer_name: None,
             file_url: None,
             data_base64: Some(data_base64.to_string()),
+            html: None,
+            wait_ms: None,
             copies: None,
             paper: None,
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeHtmlRenderer {
+        calls: Arc<Mutex<Vec<HtmlRenderRequest>>>,
+        fail_after_write: bool,
+    }
+
+    impl HtmlRenderer for FakeHtmlRenderer {
+        fn render(&self, request: HtmlRenderRequest) -> HtmlRenderFuture {
+            let calls = self.calls.clone();
+            let fail_after_write = self.fail_after_write;
+            Box::pin(async move {
+                calls.lock().unwrap().push(request.clone());
+                fs::write(&request.output_path, b"%PDF-1.7\n%%EOF")?;
+                if fail_after_write {
+                    return Err(HtmlRenderError::Navigation {
+                        message: "fake render failed".to_string(),
+                    });
+                }
+                Ok(HtmlRenderResult {
+                    renderer: "fake-html",
+                    output_path: request.output_path,
+                })
+            })
         }
     }
 

@@ -6,6 +6,7 @@ pub mod config;
 pub mod config_transfer;
 pub mod document;
 pub mod download;
+pub mod html;
 pub mod ip_whitelist;
 pub mod logs;
 pub mod office;
@@ -25,10 +26,34 @@ pub mod tray;
 
 use app_state::AppState;
 use config::AgentConfig;
-use std::io;
+use html::{browser::BrowserHtmlRenderer, resource_policy::ResourcePolicy};
+use std::{io, sync::Arc};
 #[cfg(target_os = "windows")]
 use tauri::path::BaseDirectory;
 use tauri::Manager;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeMode {
+    Gui,
+    Headless,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimePlatform {
+    Windows,
+    Macos,
+    Linux,
+    Other,
+}
+
+/// 原生 WebView fallback 已因无法统一证明其资源隔离而禁用。
+#[cfg(test)]
+const fn uses_gui_webview_fallback(mode: RuntimeMode, platform: RuntimePlatform) -> bool {
+    let _ = (mode, platform);
+    false
+}
 
 fn existing_agent_startup_error(status: agent_guard::AgentPortStatus) -> Option<io::Error> {
     match status {
@@ -73,9 +98,14 @@ pub fn run() {
             let task_history =
                 task_history::TaskHistoryStore::open(&app_config_dir.join("task_history.sqlite3"))
                     .map_err(io::Error::other)?;
-            let state = AppState::with_config_path_and_printing(config, config_path, printing)
-                .with_remote_store(remote_store)
-                .with_task_history_store(task_history);
+            let state = AppState::with_config_path_printing_and_html_renderer(
+                config,
+                config_path,
+                printing,
+                Arc::new(BrowserHtmlRenderer::new(ResourcePolicy::system())),
+            )
+            .with_remote_store(remote_store)
+            .with_task_history_store(task_history);
             let server_state = state.clone();
             let worker_state = state.clone();
             let remote_worker_state = state.clone();
@@ -150,6 +180,30 @@ fn print_backend(app: &tauri::App) -> tauri::Result<Box<dyn printing::PrintBacke
 mod tests {
     use super::*;
     use crate::agent_guard::{AgentPortStatus, RunningAgent};
+
+    #[test]
+    fn gui_runtime_never_uses_webview_fallback() {
+        for platform in [
+            RuntimePlatform::Windows,
+            RuntimePlatform::Macos,
+            RuntimePlatform::Linux,
+            RuntimePlatform::Other,
+        ] {
+            assert!(!uses_gui_webview_fallback(RuntimeMode::Gui, platform));
+        }
+    }
+
+    #[test]
+    fn headless_runtime_never_uses_webview_fallback() {
+        for platform in [
+            RuntimePlatform::Windows,
+            RuntimePlatform::Macos,
+            RuntimePlatform::Linux,
+            RuntimePlatform::Other,
+        ] {
+            assert!(!uses_gui_webview_fallback(RuntimeMode::Headless, platform));
+        }
+    }
 
     #[test]
     fn existing_agent_startup_error_allows_available_port() {

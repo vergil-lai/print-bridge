@@ -1,6 +1,6 @@
 use print_bridge_lib::protocol::{
     is_allowed_origin, validate_file_url, validate_origin, ClientMessage, EffectivePaper,
-    ErrorCode, JobStatus, PrintJobInput, SupportedFormat,
+    ErrorCode, JobStatus, JobValidationError, PrintJobInput, SupportedFormat,
 };
 use std::str::FromStr;
 
@@ -37,6 +37,213 @@ fn supported_format_accepts_pdf_image_and_legacy_image_subtypes() {
     assert_eq!(
         SupportedFormat::from_str("pptx").unwrap(),
         SupportedFormat::Pptx
+    );
+    assert_eq!(
+        SupportedFormat::from_str("html").unwrap(),
+        SupportedFormat::Html
+    );
+    assert_eq!(
+        SupportedFormat::from_str("raw-html").unwrap(),
+        SupportedFormat::RawHtml
+    );
+}
+
+#[test]
+fn parses_html_and_raw_html_jobs() {
+    let url_job: PrintJobInput = serde_json::from_str(
+        r#"{
+            "job_id":"html-url",
+            "format":"html",
+            "file_url":"https://example.com/invoice/1",
+            "wait_ms":1500
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(url_job.format, SupportedFormat::Html);
+    assert_eq!(url_job.wait_ms, Some(1500));
+
+    let inline_job: PrintJobInput = serde_json::from_str(
+        r#"{
+            "job_id":"html-inline",
+            "format":"raw-html",
+            "html":"<main>invoice</main>"
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(inline_job.format, SupportedFormat::RawHtml);
+    assert_eq!(inline_job.html.as_deref(), Some("<main>invoice</main>"));
+}
+
+#[test]
+fn validates_html_field_combinations_and_wait_range() {
+    let mut job = PrintJobInput {
+        job_id: "html".into(),
+        format: SupportedFormat::Html,
+        printer_name: None,
+        file_url: Some("https://example.com/page".into()),
+        data_base64: None,
+        html: None,
+        wait_ms: Some(30_000),
+        copies: Some(1),
+        paper: None,
+    };
+    assert!(job.validate_for_acceptance(10).is_ok());
+    job.wait_ms = Some(30_001);
+    assert_eq!(
+        job.validate_for_acceptance(10),
+        Err(JobValidationError::HtmlWaitOutOfRange)
+    );
+
+    job.wait_ms = None;
+    job.file_url = None;
+    assert_eq!(
+        job.validate_for_acceptance(10),
+        Err(JobValidationError::MissingHtmlFileUrl)
+    );
+
+    job.file_url = Some("https://example.com/page".into());
+    job.html = Some("<main>forbidden</main>".into());
+    assert_eq!(
+        job.validate_for_acceptance(10),
+        Err(JobValidationError::HtmlInlineNotAllowed)
+    );
+
+    job.html = None;
+    job.data_base64 = Some("PG1haW4+PC9tYWluPg==".into());
+    assert_eq!(
+        job.validate_for_acceptance(10),
+        Err(JobValidationError::HtmlDataBase64NotAllowed)
+    );
+}
+
+#[test]
+fn html_file_jobs_require_absolute_http_or_https_urls() {
+    let mut job = PrintJobInput {
+        job_id: "html-url-scheme".into(),
+        format: SupportedFormat::Html,
+        printer_name: None,
+        file_url: Some("https://example.com/invoice".into()),
+        data_base64: None,
+        html: None,
+        wait_ms: None,
+        copies: Some(1),
+        paper: None,
+    };
+
+    assert!(job.validate_for_acceptance(1).is_ok());
+
+    // Host/IP decisions intentionally remain with ResourcePolicy during rendering.
+    job.file_url = Some("http://127.0.0.1:8080/invoice".into());
+    assert!(job.validate_for_acceptance(1).is_ok());
+
+    for file_url in [
+        "file:///tmp/invoice.html",
+        "data:text/html,<main>invoice</main>",
+        "not-a-url",
+        "https://",
+    ] {
+        job.file_url = Some(file_url.into());
+        assert_eq!(
+            job.validate_for_acceptance(1),
+            Err(JobValidationError::InvalidHtmlFileUrl),
+            "{file_url} should be rejected before it reaches the queue"
+        );
+    }
+}
+
+#[test]
+fn validates_raw_html_and_non_html_field_combinations() {
+    let mut raw_html = PrintJobInput {
+        job_id: "raw-html".into(),
+        format: SupportedFormat::RawHtml,
+        printer_name: None,
+        file_url: None,
+        data_base64: None,
+        html: None,
+        wait_ms: Some(0),
+        copies: Some(1),
+        paper: None,
+    };
+    raw_html.html = Some("<main>invoice</main>".into());
+    assert!(raw_html.validate_for_acceptance(1).is_ok());
+
+    raw_html.html = None;
+    assert_eq!(
+        raw_html.validate_for_acceptance(1),
+        Err(JobValidationError::MissingRawHtml)
+    );
+
+    raw_html.html = Some("   ".into());
+    assert_eq!(
+        raw_html.validate_for_acceptance(1),
+        Err(JobValidationError::MissingRawHtml)
+    );
+
+    raw_html.html = Some("<main>invoice</main>".into());
+    raw_html.file_url = Some("https://example.com/invoice".into());
+    assert_eq!(
+        raw_html.validate_for_acceptance(1),
+        Err(JobValidationError::RawHtmlFileUrlNotAllowed)
+    );
+
+    raw_html.file_url = None;
+    raw_html.data_base64 = Some("PG1haW4+PC9tYWluPg==".into());
+    assert_eq!(
+        raw_html.validate_for_acceptance(1),
+        Err(JobValidationError::HtmlDataBase64NotAllowed)
+    );
+
+    raw_html.data_base64 = None;
+    raw_html.html = Some("x".repeat(1024 * 1024 + 1));
+    assert_eq!(
+        raw_html.validate_for_acceptance(1),
+        Err(JobValidationError::FileTooLarge)
+    );
+
+    let mut pdf = PrintJobInput {
+        job_id: "pdf".into(),
+        format: SupportedFormat::Pdf,
+        printer_name: None,
+        file_url: Some("https://example.com/document.pdf".into()),
+        data_base64: None,
+        html: Some("<main>forbidden</main>".into()),
+        wait_ms: None,
+        copies: Some(1),
+        paper: None,
+    };
+    assert_eq!(
+        pdf.validate_for_acceptance(1),
+        Err(JobValidationError::NonHtmlHtmlNotAllowed)
+    );
+
+    pdf.html = None;
+    pdf.wait_ms = Some(1);
+    assert_eq!(
+        pdf.validate_for_acceptance(1),
+        Err(JobValidationError::NonHtmlWaitNotAllowed)
+    );
+
+    let mut raw = PrintJobInput {
+        job_id: "raw".into(),
+        format: SupportedFormat::Raw,
+        printer_name: None,
+        file_url: None,
+        data_base64: Some("XlhB".into()),
+        html: Some("<main>forbidden</main>".into()),
+        wait_ms: None,
+        copies: None,
+        paper: None,
+    };
+    assert_eq!(
+        raw.validate_for_acceptance(1),
+        Err(JobValidationError::NonHtmlHtmlNotAllowed)
+    );
+
+    raw.html = None;
+    raw.wait_ms = Some(1);
+    assert_eq!(
+        raw.validate_for_acceptance(1),
+        Err(JobValidationError::NonHtmlWaitNotAllowed)
     );
 }
 
