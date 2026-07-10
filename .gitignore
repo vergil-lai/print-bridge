@@ -14,7 +14,9 @@ dist-ssr
 printbridge.key
 AGENTS.md
 CLAUDE.md
+large_tool_results
 .codegraph
+.worktrees
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
