@@ -69,6 +69,13 @@ If your business system already generates PDF files, images, Office files, or de
 
 Download the latest version from [Releases](https://github.com/vergil-lai/print-bridge/releases).
 
+Printing Office files also requires locally installed conversion software:
+
+- Windows: DOCX requires Microsoft Word, XLSX requires Microsoft Excel, and PPTX requires Microsoft PowerPoint.
+- macOS/Linux: install LibreOffice and make `soffice` or `libreoffice` available to the system.
+
+PrintBridge does not bundle an Office converter. The Office print job fails when the required software is unavailable, conversion fails, or conversion exceeds 120 seconds.
+
 After first launch, configure PrintBridge in the settings UI:
 
 1. Select the default printer

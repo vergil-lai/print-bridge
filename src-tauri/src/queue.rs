@@ -314,7 +314,7 @@ async fn print_downloaded_file(
         state.printing.print_pdf(&printable_path, options)
     };
 
-    // 转换后的图片会生成第二个临时 PDF，原始 PDF 则复用下载路径。
+    // 图片和 Office 输入会生成第二个临时 PDF，原始 PDF 则复用下载路径。
     if printable_path != downloaded_path {
         cleanup_file(&printable_path).await;
     }
@@ -422,7 +422,7 @@ async fn prepare_printable_pdf(
         }
 
         let output_path = downloaded_path.with_extension("pdf");
-        office_to_pdf(downloaded_path, expected_office_format, &output_path)?;
+        office_to_pdf(downloaded_path, expected_office_format, &output_path).await?;
         return Ok(output_path);
     }
 
@@ -765,7 +765,7 @@ fn remote_status_for_job_status(status: JobStatus) -> Option<RemoteReportStatus>
 
 #[cfg(test)]
 mod worker_tests {
-    use super::{process_job, resolve_print_options, QueuedJob};
+    use super::{process_job, resolve_print_options, ProcessJobError, QueuedJob};
     use crate::{
         app_state::AppState,
         config::{AgentConfig, PrintingConfig},
@@ -1262,7 +1262,7 @@ mod worker_tests {
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("office conversion failed"));
+        assert!(matches!(error, ProcessJobError::OfficeConvert(_)));
         assert!(calls.lock().unwrap().is_empty());
         let _ = fs::remove_file(&docx_path);
         let _ = fs::remove_file(&pdf_output_path);
