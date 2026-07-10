@@ -69,6 +69,13 @@ PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https:
 
 在 [Releases](https://github.com/vergil-lai/print-bridge/releases) 下载最新版本。
 
+如果需要打印 Office 文件，还必须安装本机转换软件：
+
+- Windows：DOCX 需要 Microsoft Word，XLSX 需要 Microsoft Excel，PPTX 需要 Microsoft PowerPoint。
+- macOS/Linux：需要安装 LibreOffice，并确保系统能够调用 `soffice` 或 `libreoffice`。
+
+PrintBridge 不内置 Office 转换器。缺少对应软件、转换失败或转换超过 120 秒时，该 Office 打印任务会失败。
+
 首次运行后，在 PrintBridge 设置界面完成：
 
 1. 选择默认打印机
