@@ -1,8 +1,8 @@
 Package: print-bridge-server
-Version: \${VERSION}
+Version: ${VERSION}
 Section: utils
 Priority: optional
-Architecture: \${ARCH}
+Architecture: ${ARCH}
 Maintainer: Vergil Lai
 Depends: systemd, cups-client, libreoffice
 Provides: print-bridge

@@ -41,8 +41,14 @@ test('release workflow installs AppImage tools and separates NSIS from MSI', () 
 
 test('headless packaging uses the normalized Linux package version', () => {
   const script = readFileSync('scripts/build-server-packages.sh', 'utf8');
+  const controlTemplate = readFileSync('apps/server/packaging/deb/control', 'utf8');
+  const renderedControl = controlTemplate
+    .replace('${VERSION}', '0.2.0~dev.2')
+    .replace('${ARCH}', 'amd64');
 
   assert.match(script, /release-version\.mjs" linux/);
   assert.ok(script.includes('s/\\${VERSION}/$PACKAGE_VERSION/'));
   assert.ok(script.includes('s/__VERSION__/$PACKAGE_VERSION/'));
+  assert.match(renderedControl, /^Version: [0-9]/m);
+  assert.match(renderedControl, /^Architecture: amd64$/m);
 });
