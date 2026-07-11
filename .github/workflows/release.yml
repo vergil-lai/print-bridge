@@ -34,8 +34,44 @@ jobs:
       - run: pnpm --dir apps/desktop lint
       - run: pnpm --dir apps/desktop build
 
-  publish-tauri:
+  prepare-release:
     needs: quality
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create GitHub release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('apps/desktop/package.json', 'utf8')).version")"
+          TAG="printbridge-v${VERSION}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+            exit 0
+          fi
+
+          ARGS=(
+            "$TAG"
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "PrintBridge v${VERSION}"
+            --notes "See the assets to download and install this version."
+          )
+          if node scripts/release-version.mjs prerelease "$VERSION" | grep -qx true; then
+            ARGS+=(--prerelease)
+          fi
+          gh release create "${ARGS[@]}"
+
+  publish-tauri:
+    needs: prepare-release
     permissions:
       contents: write
     strategy:
@@ -45,14 +81,28 @@ jobs:
         include:
           - platform: macos-latest
             args: --target aarch64-apple-darwin
+            msi_version: false
+            upload_updater_json: true
           - platform: macos-15-intel
             args: --target x86_64-apple-darwin
+            msi_version: false
+            upload_updater_json: true
           - platform: ubuntu-22.04
             args: --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage
+            msi_version: false
+            upload_updater_json: true
           - platform: ubuntu-22.04-arm
             args: --target aarch64-unknown-linux-gnu --bundles deb,rpm,appimage
+            msi_version: false
+            upload_updater_json: true
           - platform: windows-latest
-            args: --target x86_64-pc-windows-msvc --bundles nsis,msi
+            args: --target x86_64-pc-windows-msvc --bundles nsis
+            msi_version: false
+            upload_updater_json: true
+          - platform: windows-latest
+            args: --target x86_64-pc-windows-msvc --bundles msi
+            msi_version: true
+            upload_updater_json: false
 
     runs-on: ${{ matrix.platform }}
 
@@ -90,7 +140,8 @@ jobs:
             libgtk-3-dev \
             librsvg2-dev \
             patchelf \
-            rpm
+            rpm \
+            xdg-utils
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
@@ -100,7 +151,35 @@ jobs:
         shell: bash
         run: |
           VERSION="$(node -p "JSON.parse(require('fs').readFileSync('apps/desktop/package.json', 'utf8')).version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$(node scripts/release-version.mjs prerelease "$VERSION")" >> "$GITHUB_OUTPUT"
+
+      - name: Use an MSI-compatible prerelease version
+        if: matrix.msi_version
+        shell: bash
+        run: |
+          VERSION="${{ steps.release_version.outputs.version }}"
+          MSI_VERSION="$(node -e '
+            const version = process.argv[1];
+            const [base, prerelease] = version.split("-", 2);
+            if (!prerelease) {
+              process.stdout.write(base);
+              process.exit(0);
+            }
+            const numeric = prerelease.split(".").findLast((part) => /^\d+$/.test(part));
+            if (numeric === undefined || Number(numeric) > 65535) {
+              throw new Error(`Cannot convert ${version} to an MSI-compatible version`);
+            }
+            process.stdout.write(`${base}-${numeric}`);
+          ' "$VERSION")"
+          MSI_VERSION="$MSI_VERSION" node -e '
+            const fs = require("fs");
+            const path = "apps/desktop/src-tauri/tauri.conf.json";
+            const config = JSON.parse(fs.readFileSync(path, "utf8"));
+            config.version = process.env.MSI_VERSION;
+            fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          '
+          echo "Using MSI bundle version $MSI_VERSION for release $VERSION"
 
       - name: Import Apple Developer certificate
         if: startsWith(matrix.platform, 'macos')
@@ -130,20 +209,23 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_SIGNING_IDENTITY || '' }}
         with:
           projectPath: apps/desktop
-          tagName: printbridge-v__VERSION__
-          releaseName: PrintBridge v__VERSION__
+          tagName: printbridge-v${{ steps.release_version.outputs.version }}
+          releaseName: PrintBridge v${{ steps.release_version.outputs.version }}
           releaseBody: See the assets to download and install this version.
           releaseDraft: false
           prerelease: ${{ steps.release_version.outputs.prerelease }}
           args: ${{ matrix.args }}
+          uploadUpdaterJson: ${{ matrix.upload_updater_json }}
+          updaterJsonPreferNsis: true
 
       - name: Patch updater download URLs
+        if: matrix.upload_updater_json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/patch-updater-json.mjs
 
   publish-headless:
-    needs: publish-tauri
+    needs: prepare-release
     strategy:
       fail-fast: false
       matrix:
@@ -172,23 +254,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('apps/desktop/package.json', 'utf8')).version")"
-          gh release upload "printbridge-v${VERSION}" target/packages/* --clobber
+          gh release upload "${{ needs.prepare-release.outputs.tag }}" target/packages/* --clobber
 
   cleanup-release-signatures:
-    needs: [publish-tauri, publish-headless]
+    needs: [prepare-release, publish-tauri, publish-headless]
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v5
-
-      - name: Read release tag
-        id: release
-        shell: bash
-        run: |
-          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('apps/desktop/package.json', 'utf8')).version")"
-          echo "tag=printbridge-v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Remove standalone updater signature assets
         env:
@@ -196,7 +271,7 @@ jobs:
         shell: bash
         run: |
           mapfile -t SIG_ASSETS < <(
-            gh release view "${{ steps.release.outputs.tag }}" \
+            gh release view "${{ needs.prepare-release.outputs.tag }}" \
               --repo "${GITHUB_REPOSITORY}" \
               --json assets \
               --jq '.assets[].name | select(endswith(".sig"))'
@@ -209,7 +284,7 @@ jobs:
 
           for ASSET in "${SIG_ASSETS[@]}"; do
             echo "Deleting release asset: ${ASSET}"
-            gh release delete-asset "${{ steps.release.outputs.tag }}" "${ASSET}" \
+            gh release delete-asset "${{ needs.prepare-release.outputs.tag }}" "${ASSET}" \
               --repo "${GITHUB_REPOSITORY}" \
               --yes
           done

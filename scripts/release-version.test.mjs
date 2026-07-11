@@ -21,6 +21,24 @@ test('release workflow marks SemVer prereleases as GitHub prereleases', () => {
   assert.match(workflow, /prerelease: \$\{\{ steps\.release_version\.outputs\.prerelease \}\}/);
 });
 
+test('desktop and headless publishing are independent after release preparation', () => {
+  const workflow = readFileSync('.github/workflows/release.yml', 'utf8');
+
+  assert.match(workflow, /prepare-release:\n\s+needs: quality/);
+  assert.match(workflow, /publish-tauri:\n\s+needs: prepare-release/);
+  assert.match(workflow, /publish-headless:\n\s+needs: prepare-release/);
+  assert.doesNotMatch(workflow, /publish-headless:\n\s+needs: publish-tauri/);
+});
+
+test('release workflow installs AppImage tools and separates NSIS from MSI', () => {
+  const workflow = readFileSync('.github/workflows/release.yml', 'utf8');
+
+  assert.match(workflow, /xdg-utils/);
+  assert.match(workflow, /--bundles nsis\n/);
+  assert.match(workflow, /--bundles msi\n/);
+  assert.doesNotMatch(workflow, /--bundles nsis,msi/);
+});
+
 test('headless packaging uses the normalized Linux package version', () => {
   const script = readFileSync('scripts/build-server-packages.sh', 'utf8');
 
