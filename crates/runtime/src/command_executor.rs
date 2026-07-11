@@ -156,6 +156,9 @@ impl CommandExecutor for RuntimeCommandExecutor {
                 AgentConfig::load(&path).map_err(Self::runtime_error)?;
                 Ok(CommandResult::Empty)
             }
+            Command::Doctor { product } => Ok(CommandResult::Doctor(
+                crate::doctor::run_doctor(&self.state, self.listen_addr, product).await,
+            )),
             Command::Status => Ok(CommandResult::Status(AgentStatus {
                 running: true,
                 listen_addr: Some(self.listen_addr),

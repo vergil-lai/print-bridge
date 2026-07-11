@@ -23,6 +23,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+async-trait = "0.1"
 print-bridge-core = { path = "../../../crates/core" }
 print-bridge-cli = { path = "../../../crates/cli" }
 print-bridge-runtime = { path = "../../../crates/runtime" }
@@ -40,6 +41,7 @@ tauri-plugin-log = "2"
 tempfile = "3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+auto-launch = "0.5"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 

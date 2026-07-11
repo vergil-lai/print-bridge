@@ -165,12 +165,17 @@ print-bridge paper
 print-bridge paper set 60 40
 
 print-bridge origin add "https://example.com"
+print-bridge ip add "192.168.1.0/24"
 
 print-bridge remote enable
 print-bridge remote set-url "https://example.com/print-task"
+print-bridge remote generate-device-id
 
 print-bridge task
+print-bridge doctor
 ```
+
+`config export/import` supports encrypted configuration transfer, and repeated `--only` options select export fields. Desktop additionally supports `autostart` and `app language`; Headless uses English and systemd-managed startup.
 
 The GUI and headless packages both expose the same `print-bridge` CLI but cannot be installed together. Only the Linux headless package provides `print-bridge serve`; installing its deb/rpm creates the dedicated `printbridge` system user and enables the systemd service automatically. There are no `serve install/uninstall` commands.
 

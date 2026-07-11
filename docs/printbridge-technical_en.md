@@ -209,9 +209,15 @@ print-bridge printer set-default "Printer Name"
 print-bridge paper
 print-bridge paper set 60 40
 
+print-bridge service
+print-bridge service set-port 17521
+
 print-bridge origin
 print-bridge origin add "https://example.com"
 print-bridge origin delete "https://example.com"
+print-bridge ip
+print-bridge ip add "192.168.1.0/24"
+print-bridge ip delete "192.168.1.0/24"
 
 print-bridge remote
 print-bridge remote enable
@@ -221,6 +227,8 @@ print-bridge remote set-token "token"
 print-bridge remote set-device-id "factory-pi-01"
 print-bridge remote set-device-name "packing-station-01"
 print-bridge remote set-interval 10
+print-bridge remote set-max-retries 10
+print-bridge remote generate-device-id
 
 print-bridge task
 print-bridge task "JOB-001"
@@ -229,12 +237,24 @@ print-bridge status
 print-bridge logs
 print-bridge test-remote
 print-bridge test-print
+print-bridge doctor
+print-bridge doctor --json
+
+print-bridge config export ./printbridge-config.json --only service-port --only allowed-ips
+print-bridge config import ./printbridge-config.json --preview
+print-bridge config validate
+
+# Desktop product only
+print-bridge autostart enable
+print-bridge app language en
 
 # Available only in the Linux headless product
 print-bridge serve
 ```
 
 The CLI and GUI share the strongly typed `CommandService`; the GUI executes commands in process, while an external CLI calls a running Agent over local IPC. `serve` exists only in the Linux headless product.
+
+`doctor` only checks local configuration, directory permissions, Agent/IPC state, the service port, printers, browser, Office/LibreOffice, remote configuration completeness, and the Headless systemd environment. It does not contact the remote task server, submit prints, or change configuration. FAIL exits with 1; WARN-only reports exit with 0. Other stable exits are invalid input 2, Agent not running 3, permission denied 4, and conflict 5.
 
 ## Headless Linux deployment
 
@@ -254,11 +274,14 @@ The export dialog can include these fields, all selected by default:
 
 - Local port
 - Origin allowlist
+- IP allowlist
 - Remote task switch
 - Remote task URL
 - Remote task Authorization Token
 - Poll interval
 - Report retry count
+
+The CLI exports every field by default. Repeat `--only` to select `service-port`, `allowed-origins`, `allowed-ips`, `remote-enabled`, `remote-url`, `remote-token`, `remote-interval`, or `remote-max-retries`. Interactive passwords are hidden; automation uses `--password-file`, and no `--password` argument is provided that could expose a secret in the process list. Import always creates a diff preview and overwrites only fields present in the file; non-interactive import requires `--password-file --yes`.
 
 Export requires a password. The password may be empty; an empty password still uses the same encryption flow. If Authorization Token is selected and the password is empty, the UI requires an additional confirmation.
 

@@ -11,7 +11,7 @@ use parser::{ServerArgs, ServerCommand};
 use print_bridge_cli::{
     client::LocalClientExecutor,
     parser::{run_cli_from, CliArgs},
-    CommandExecutor, CommandService,
+    CommandExecutor, CommandService, TerminalInteraction, UnsupportedProductCommandAdapter,
 };
 use print_bridge_runtime::{ipc, RuntimeBuilder, RuntimeCommandExecutor};
 
@@ -33,7 +33,10 @@ async fn main() {
     };
     if let Err(error) = result {
         eprintln!("{error}");
-        std::process::exit(1);
+        let exit_code = error
+            .downcast_ref::<print_bridge_cli::CommandError>()
+            .map_or(1, print_bridge_cli::CommandError::exit_code);
+        std::process::exit(exit_code);
     }
 }
 
@@ -50,15 +53,34 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_shared_cli(argv: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
     let paths = paths::system_paths();
-    let runtime = RuntimeBuilder::new(paths.clone()).build()?;
+    let read_only = argv.get(1).and_then(|arg| arg.to_str()) == Some("doctor");
+    let state = if read_only {
+        let config = print_bridge_runtime::config::AgentConfig::load(&paths.config_path)?;
+        print_bridge_runtime::state::AgentState::with_config_path_and_printing(
+            config,
+            paths.config_path.clone(),
+            print_bridge_runtime::printing::default_backend(),
+        )
+    } else {
+        RuntimeBuilder::new(paths.clone()).build()?.state()
+    };
     let offline: Arc<dyn CommandExecutor> = Arc::new(RuntimeCommandExecutor::new(
-        runtime.state(),
+        state,
         SocketAddr::from(([127, 0, 0, 1], 0)),
     ));
     let online: Arc<dyn CommandExecutor> = Arc::new(LocalClientExecutor::new(ipc::socket_path(
         &paths.runtime_dir,
     )));
-    let output = run_cli_from(argv, Arc::new(CommandService::new(Some(online), offline))).await?;
+    let product = Arc::new(UnsupportedProductCommandAdapter::headless(
+        "headless autostart is managed by systemd and application language is fixed to English",
+    ));
+    let output = run_cli_from(
+        argv,
+        Arc::new(CommandService::new(Some(online), offline)),
+        product,
+        Arc::new(TerminalInteraction),
+    )
+    .await?;
     print!("{}", output.stdout);
     eprint!("{}", output.stderr);
     Ok(())

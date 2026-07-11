@@ -6,6 +6,7 @@ pub mod agent;
 pub mod agent_guard;
 pub mod builder;
 pub mod command_executor;
+pub mod doctor;
 pub mod document;
 pub mod download;
 pub mod html;

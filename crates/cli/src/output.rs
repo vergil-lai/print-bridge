@@ -18,6 +18,7 @@ pub enum CommandErrorKind {
     PermissionDenied,
     Conflict,
     Runtime,
+    Unsupported,
 }
 
 /// 可跨 CLI 与 IPC 边界传递的命令错误。
@@ -33,6 +34,17 @@ impl CommandError {
         Self {
             kind,
             message: message.into(),
+        }
+    }
+
+    /// 返回功能 CLI 使用的稳定进程退出码。
+    pub fn exit_code(&self) -> i32 {
+        match self.kind {
+            CommandErrorKind::InvalidInput => 2,
+            CommandErrorKind::NotRunning => 3,
+            CommandErrorKind::PermissionDenied => 4,
+            CommandErrorKind::Conflict => 5,
+            CommandErrorKind::Runtime | CommandErrorKind::Unsupported => 1,
         }
     }
 }
@@ -52,6 +64,67 @@ pub struct AgentStatus {
     pub listen_addr: Option<SocketAddr>,
 }
 
+/// 提供 CLI 的产品类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductKind {
+    Desktop,
+    Headless,
+}
+
+/// 单项 Doctor 检查状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum DoctorStatus {
+    Pass,
+    Warn,
+    Fail,
+}
+
+/// Doctor 的单项只读检查结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctorCheck {
+    pub code: String,
+    pub status: DoctorStatus,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+}
+
+/// Doctor 汇总计数。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctorSummary {
+    pub pass: usize,
+    pub warn: usize,
+    pub fail: usize,
+}
+
+/// Doctor 的稳定结构化报告。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctorReport {
+    pub checks: Vec<DoctorCheck>,
+    pub summary: DoctorSummary,
+}
+
+impl DoctorReport {
+    /// 从检查项计算汇总。
+    pub fn new(checks: Vec<DoctorCheck>) -> Self {
+        let mut summary = DoctorSummary {
+            pass: 0,
+            warn: 0,
+            fail: 0,
+        };
+        for check in &checks {
+            match check.status {
+                DoctorStatus::Pass => summary.pass += 1,
+                DoctorStatus::Warn => summary.warn += 1,
+                DoctorStatus::Fail => summary.fail += 1,
+            }
+        }
+        Self { checks, summary }
+    }
+}
+
 /// 功能命令的结构化结果。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "result", content = "payload", rename_all = "snake_case")]
@@ -64,5 +137,6 @@ pub enum CommandResult {
     TaskHistory(Vec<TaskHistoryJob>),
     TaskHistoryEvents(Vec<TaskHistoryEvent>),
     ImportPreview(ImportPreview),
+    Doctor(DoctorReport),
     Status(AgentStatus),
 }

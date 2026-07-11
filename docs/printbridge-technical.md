@@ -209,9 +209,15 @@ print-bridge printer set-default "Printer Name"
 print-bridge paper
 print-bridge paper set 60 40
 
+print-bridge service
+print-bridge service set-port 17521
+
 print-bridge origin
 print-bridge origin add "https://example.com"
 print-bridge origin delete "https://example.com"
+print-bridge ip
+print-bridge ip add "192.168.1.0/24"
+print-bridge ip delete "192.168.1.0/24"
 
 print-bridge remote
 print-bridge remote enable
@@ -221,6 +227,8 @@ print-bridge remote set-token "token"
 print-bridge remote set-device-id "factory-pi-01"
 print-bridge remote set-device-name "packing-station-01"
 print-bridge remote set-interval 10
+print-bridge remote set-max-retries 10
+print-bridge remote generate-device-id
 
 print-bridge task
 print-bridge task "JOB-001"
@@ -229,12 +237,24 @@ print-bridge status
 print-bridge logs
 print-bridge test-remote
 print-bridge test-print
+print-bridge doctor
+print-bridge doctor --json
+
+print-bridge config export ./printbridge-config.json --only service-port --only allowed-ips
+print-bridge config import ./printbridge-config.json --preview
+print-bridge config validate
+
+# 仅 Desktop 产品支持
+print-bridge autostart enable
+print-bridge app language zh-CN
 
 # 仅 Linux headless 产品提供
 print-bridge serve
 ```
 
 CLI 与 GUI 共用强类型 `CommandService`；GUI 在进程内执行命令，外部 CLI 通过本地 IPC 调用运行中的 Agent。`serve` 只存在于 Linux headless 产品。
+
+`doctor` 只检查本地配置、目录权限、Agent/IPC、端口、打印机、浏览器、Office/LibreOffice、远程配置完整性以及 Headless systemd 环境；不会连接远程任务服务器、提交打印或修改配置。有 FAIL 时退出码为 1，只有 WARN 时仍为 0。其他稳定退出码为：参数错误 2、Agent 未运行 3、权限错误 4、冲突 5。
 
 ## Headless Linux 部署
 
@@ -254,11 +274,14 @@ printbridge-config.json
 
 - 本地端口
 - Origin 白名单列表
+- IP 白名单列表
 - 远程任务开关
 - 远程任务 URL
 - 远程任务 Authorization Token
 - 轮询时间
 - 上报重试次数
+
+CLI 默认导出全部字段，也可以重复使用 `--only` 选择 `service-port`、`allowed-origins`、`allowed-ips`、`remote-enabled`、`remote-url`、`remote-token`、`remote-interval` 和 `remote-max-retries`。密码交互时隐藏输入；自动化使用 `--password-file`，不提供会把密码暴露到进程列表的 `--password`。导入总是先生成差异预览，并只覆盖文件实际包含的字段；非交互导入需要 `--password-file --yes`。
 
 导出时需要填写密码，密码可以留空；留空时仍然会按同一套加密流程生成文件。如果勾选了 Authorization Token 且密码为空，界面会要求二次确认。
 

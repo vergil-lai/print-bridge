@@ -4,6 +4,7 @@ pub use print_bridge_runtime::{
 };
 pub mod cli;
 pub mod commands;
+mod product_cli;
 pub use print_bridge_core::{config, ip_whitelist, protocol, remote_protocol};
 pub mod tray;
 

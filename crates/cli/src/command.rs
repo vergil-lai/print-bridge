@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use print_bridge_core::config::AgentConfig;
 use serde::{Deserialize, Serialize};
 
-use crate::{config_transfer::ExportConfigOptions, CommandPolicy};
+use crate::{config_transfer::ExportConfigOptions, CommandPolicy, ProductKind};
 
 /// 可由 CLI、桌面 IPC 或本地 Agent IPC 执行的功能命令。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +44,9 @@ pub enum Command {
     ValidateConfig {
         path: Option<PathBuf>,
     },
+    Doctor {
+        product: ProductKind,
+    },
     Status,
 }
 
@@ -64,7 +67,8 @@ impl Command {
             | Self::ClearTaskHistory
             | Self::ExportConfig { .. }
             | Self::PreviewConfigImport { .. }
-            | Self::ImportConfig { .. } => CommandPolicy::OnlinePreferred,
+            | Self::ImportConfig { .. }
+            | Self::Doctor { .. } => CommandPolicy::OnlinePreferred,
             Self::ValidateConfig { .. } => CommandPolicy::OfflineAllowed,
         }
     }
