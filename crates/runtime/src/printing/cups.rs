@@ -15,6 +15,7 @@ pub struct CupsPrintBackend {
 /// CUPS 后端当前运行的平台差异。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CupsPlatform {
+    #[cfg(any(target_os = "macos", test))]
     Macos,
     #[cfg(any(target_os = "linux", test))]
     Linux,
@@ -22,6 +23,7 @@ pub enum CupsPlatform {
 
 impl CupsPrintBackend {
     /// 创建 macOS CUPS 打印后端。
+    #[cfg(any(target_os = "macos", test))]
     pub fn macos() -> Self {
         Self {
             platform: CupsPlatform::Macos,
@@ -38,6 +40,7 @@ impl CupsPrintBackend {
 
     fn backend_name(self) -> &'static str {
         match self.platform {
+            #[cfg(any(target_os = "macos", test))]
             CupsPlatform::Macos => "macos-cups",
             #[cfg(any(target_os = "linux", test))]
             CupsPlatform::Linux => "linux-cups",
@@ -46,6 +49,7 @@ impl CupsPrintBackend {
 
     fn raw_backend_name(self) -> &'static str {
         match self.platform {
+            #[cfg(any(target_os = "macos", test))]
             CupsPlatform::Macos => "macos-cups-raw",
             #[cfg(any(target_os = "linux", test))]
             CupsPlatform::Linux => "linux-cups-raw",
