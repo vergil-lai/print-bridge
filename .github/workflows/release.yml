@@ -48,9 +48,11 @@ jobs:
           - platform: macos-15-intel
             args: --target x86_64-apple-darwin
           - platform: ubuntu-22.04
-            args: ""
+            args: --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage
+          - platform: ubuntu-22.04-arm
+            args: --target aarch64-unknown-linux-gnu --bundles deb,rpm,appimage
           - platform: windows-latest
-            args: ""
+            args: --target x86_64-pc-windows-msvc --bundles nsis,msi
 
     runs-on: ${{ matrix.platform }}
 
@@ -93,6 +95,13 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Read release version
+        id: release_version
+        shell: bash
+        run: |
+          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('apps/desktop/package.json', 'utf8')).version")"
+          echo "prerelease=$(node scripts/release-version.mjs prerelease "$VERSION")" >> "$GITHUB_OUTPUT"
+
       - name: Import Apple Developer certificate
         if: startsWith(matrix.platform, 'macos')
         env:
@@ -125,7 +134,7 @@ jobs:
           releaseName: PrintBridge v__VERSION__
           releaseBody: See the assets to download and install this version.
           releaseDraft: false
-          prerelease: false
+          prerelease: ${{ steps.release_version.outputs.prerelease }}
           args: ${{ matrix.args }}
 
       - name: Patch updater download URLs
@@ -135,7 +144,17 @@ jobs:
 
   publish-headless:
     needs: publish-tauri
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
+          - platform: ubuntu-22.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
+    runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
     steps:
@@ -144,6 +163,9 @@ jobs:
       - name: Install package tools
         run: sudo apt-get update && sudo apt-get install -y rpm
       - name: Build headless packages
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.rust_target }}
+          PACKAGE_ARCH: ${{ matrix.deb_arch }}
         run: scripts/build-server-packages.sh
       - name: Upload packages to release
         env:

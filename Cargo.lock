@@ -4407,7 +4407,7 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "print-bridge-cli"
-version = "0.1.6"
+version = "0.2.0-dev.1"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -4428,7 +4428,7 @@ dependencies = [
 
 [[package]]
 name = "print-bridge-core"
-version = "0.1.6"
+version = "0.2.0-dev.1"
 dependencies = [
  "base64 0.22.1",
  "ipnet",
@@ -4441,7 +4441,7 @@ dependencies = [
 
 [[package]]
 name = "print-bridge-desktop"
-version = "0.1.6"
+version = "0.2.0-dev.1"
 dependencies = [
  "image",
  "print-bridge-cli",
@@ -4466,7 +4466,7 @@ dependencies = [
 
 [[package]]
 name = "print-bridge-runtime"
-version = "0.1.6"
+version = "0.2.0-dev.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4503,7 +4503,7 @@ dependencies = [
 
 [[package]]
 name = "print-bridge-server"
-version = "0.1.6"
+version = "0.2.0-dev.1"
 dependencies = [
  "clap",
  "print-bridge-cli",

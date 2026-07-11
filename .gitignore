@@ -7,9 +7,12 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# pnpm workspace dependencies
+node_modules/
+
+# Desktop frontend build output
+/apps/desktop/dist/
+/apps/desktop/dist-ssr/
 *.local
 printbridge.key
 AGENTS.md
@@ -17,6 +20,8 @@ CLAUDE.md
 large_tool_results
 .codegraph
 .worktrees
+
+# Cargo workspace build output
 /target/
 # Editor directories and files
 .vscode/*

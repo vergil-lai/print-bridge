@@ -16,7 +16,7 @@ PrintBridge does not replace printer drivers and does not bypass the operating s
 ## Features
 
 - Runs in the system tray and hides the main window by default
-- Supports Windows, macOS, and Linux, with Linux daemon and Docker support planned
+- Supports Windows, macOS, and Linux Desktop, plus a systemd-managed Linux headless product
 - Local WebSocket service and process-local management IPC
 - Website allowlist (Origin allowlist) to control which web pages may connect, for example `https://example.com`
 - IP allowlist to control which client addresses may access the local service, with single IP and CIDR support
@@ -29,7 +29,7 @@ PrintBridge does not replace printer drivers and does not bypass the operating s
 - CLI operations mode for viewing and updating local configuration without opening the GUI
 - Printer discovery, paper discovery, persistent configuration, and recent task history
 - Encrypted configuration export/import for workstation rollout
-- Online updates
+- Tauri online updates for Desktop; Headless updates will use future APT/RPM repositories
 
 ## Remote Task Polling
 
@@ -110,6 +110,15 @@ If your business system already generates PDF files, images, Office files, or de
 
 Download the latest version from [Releases](https://github.com/vergil-lai/print-bridge/releases).
 
+| Product | Platform | Architecture | Package |
+| --- | --- | --- | --- |
+| Desktop | Windows | x86_64 | NSIS `.exe`, WiX `.msi` |
+| Desktop | macOS | Intel, Apple Silicon | Architecture-specific macOS installer |
+| Desktop | Linux | x86_64, ARM64 | `.deb`, `.rpm`, `.AppImage` |
+| Headless | Linux | x86_64, ARM64 | `.deb`, `.rpm` |
+
+Desktop and Headless both install the `print-bridge` command, but they are mutually exclusive products and cannot be installed on the same machine. Linux Headless is intended for servers without a desktop, Raspberry Pi devices, industrial computers, and dedicated print hosts. Installing its deb/rpm creates the `printbridge` system user and enables the systemd system service automatically.
+
 Printing Office files also requires locally installed conversion software:
 
 - Windows: DOCX requires Microsoft Word, XLSX requires Microsoft Excel, and PPTX requires Microsoft PowerPoint.
@@ -118,6 +127,8 @@ Printing Office files also requires locally installed conversion software:
 PrintBridge does not bundle an Office converter. The Office print job fails when the required software is unavailable, conversion fails, or conversion exceeds 120 seconds.
 When a Windows conversion times out, PrintBridge only cleans up the Office instance started for that task; it does not close Word, Excel, or PowerPoint sessions already opened by the user.
 
+### Initial Desktop Configuration
+
 After first launch, configure PrintBridge in the settings UI:
 
 1. Select the default printer
@@ -125,6 +136,22 @@ After first launch, configure PrintBridge in the settings UI:
 3. Add your business system Origin to the website allowlist, for example `https://example.com`
 4. Keep the default IP allowlist entry `127.0.0.1`; if LAN devices need to connect, add explicit IPs or CIDR ranges such as `192.168.1.10` or `192.168.1.0/24`
 5. If remote task polling is required, enter the task URL in the Remote tab and enable it
+
+### Initial Headless Configuration
+
+Headless has no settings UI. Use the same `print-bridge` CLI for configuration and diagnostics. After installing the deb/rpm, configure the default printer, paper, Origin allowlist, and remote task URL, then check the systemd service:
+
+```bash
+print-bridge printer
+print-bridge printer set-default "Printer Name"
+print-bridge paper set 60 40
+print-bridge origin add "https://example.com"
+print-bridge remote set-url "https://example.com/print-task"
+print-bridge remote enable
+systemctl status print-bridge
+```
+
+The Headless `print-bridge serve` process is started automatically by systemd. A normal installation does not require running it manually, and there are no `serve install/uninstall` commands.
 
 ## CLI Mode
 
