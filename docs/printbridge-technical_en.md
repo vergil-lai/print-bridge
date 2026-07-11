@@ -15,13 +15,116 @@
 | Office conversion | Microsoft Office (Windows) / LibreOffice (macOS/Linux)                         |
 | Platform printing | [SumatraPDF](https://www.sumatrapdfreader.org/)(Windows) / CUPS `lp` (macOS/Linux)   |
 
+## Current Architecture
+
+PrintBridge is a Cargo workspace that separates pure domain models, runtime capabilities, functional commands, and final products. The Vue frontend belongs to the complete desktop product, so it lives under `apps/desktop` instead of a Rust crate.
+
+```text
+PrintBridge/
+├── Cargo.toml
+├── crates/
+│   ├── core/       # Pure models and rules
+│   ├── cli/        # Shared functional commands, Clap parser, local IPC client
+│   └── runtime/    # Agent state, workers, platform adapters, WebSocket, local IPC server
+├── apps/
+│   ├── desktop/
+│   │   ├── src/            # Vue 3 frontend
+│   │   └── src-tauri/      # Tauri product entry and thin IPC adapters
+│   └── server/             # Linux headless product, systemd, deb/rpm packaging
+├── scripts/
+└── docs/
+```
+
+### Dependency Direction
+
+```mermaid
+flowchart TD
+    core["crates/core<br/>Config, protocols, tasks, queue models"]
+    cli["crates/cli<br/>CommandService, Clap, IPC client"]
+    runtime["crates/runtime<br/>Agent, workers, print and conversion adapters"]
+    desktop["apps/desktop<br/>Vue + Tauri"]
+    server["apps/server<br/>Linux headless"]
+
+    cli --> core
+    runtime --> cli
+    runtime --> core
+    desktop --> runtime
+    desktop --> cli
+    server --> runtime
+    server --> cli
+```
+
+`crates/core` has no dependency on Tauri, Axum, Clap, or SQLite. `apps/desktop` and `apps/server` only own product entrypoints, platform paths, lifecycle composition, and packaging. They do not duplicate queue, configuration, or printing logic.
+
+### Crate Responsibilities
+
+| Module | Owns | Does not own |
+| --- | --- | --- |
+| `crates/core` | `AgentConfig`, WebSocket/remote protocols, IP/Origin validation, print models, queue models, task-history DTOs | Product filesystem paths, SQLite, network listeners, Tauri |
+| `crates/cli` | Typed `Command` / `CommandResult`, `CommandService`, Clap parser, config transfer, local IPC client | Agent startup, print workers, Tauri UI |
+| `crates/runtime` | `AgentState`, `RuntimeBuilder`, `AgentRuntime`, queue and remote workers, SQLite stores, print/Office/HTML adapters, WebSocket and local IPC server | GUI, systemd package scripts, product argument dispatch |
+| `apps/desktop` | Vue settings UI, Tauri commands, tray, autostart, desktop packaging | REST API, domain rules, headless `serve` |
+| `apps/server` | `serve` entrypoint, fixed Linux paths, dependency preflight, signals/systemd readiness, deb/rpm | GUI, desktop tray, per-user service installation |
+
+### Shared Functional Commands
+
+Settings, printer and paper queries, logs, task history, config transfer, remote connection tests, and test printing are represented as `crates/cli::Command`. The GUI and Clap parser do not directly mutate config files, SQLite, or print backends. Both call the same `CommandService`.
+
+```mermaid
+flowchart LR
+    vue["Vue settings UI"] --> tauri["Thin Tauri adapter"]
+    clap["print-bridge CLI"] --> service["CommandService"]
+    tauri --> service
+    service --> inprocess["GUI online executor<br/>In-process AgentState"]
+    service --> online["CLI online executor<br/>Local IPC"]
+    service --> offline["Offline executor<br/>Local config and stores"]
+    inprocess --> agent["Running AgentState"]
+    online --> agent
+    offline --> local["Local state assembled by RuntimeBuilder"]
+```
+
+Command policies are:
+
+- `OnlineOnly`: must run inside the active Agent, including status, in-memory logs, remote connection tests, and test printing.
+- `OnlinePreferred`: first use the active Agent; offline execution is allowed only after an explicit `NotRunning` result.
+- `OfflineAllowed`: may execute directly through the offline executor, such as config-file validation.
+
+Permission failures, IPC protocol failures, and runtime errors are never interpreted as “Agent not running,” so they cannot silently fall back and create split state.
+
+### Local IPC
+
+External CLI management of a running Agent does not use HTTP. Unix uses `agent.sock` inside the runtime directory with mode `0660`; Windows uses a stable named pipe. Requests and responses use JSON envelopes containing `protocol_version` and `request_id`. Each envelope is wrapped in a 4-byte big-endian length frame with an 8 MiB maximum. The GUI Tauri adapter runs in the Agent process and calls the same `CommandService` directly; it does not spawn a subprocess or parse CLI stdout.
+
+Desktop stores its runtime directory under `run/` in the application config directory. Linux headless uses `/run/print-bridge/agent.sock`. The IPC server shares the same cancellation signal as WebSocket, the queue worker, and the remote worker, and `AgentHandle` waits for all of them during shutdown.
+
+### Agent Lifecycle
+
+`RuntimeBuilder` creates directories, reads `config.json`, opens `task_history.sqlite3` and `remote.sqlite3`, and injects the platform print backend and HTML renderer. `AgentRuntime::start()` binds the WebSocket and local IPC listeners, starts the queue and remote workers, and returns `AgentHandle`.
+
+During shutdown, `AgentHandle::shutdown()` stops accepting new connections, cancels background workers, waits for active work to exit, and removes the Unix socket. Headless sends systemd `READY=1` only after every component starts successfully and sends `STOPPING=1` before shutdown.
+
+### Two Products
+
+The products use different package identities but each ships only a binary named `print-bridge`:
+
+| Product | Package | No-argument behavior | `serve` |
+| --- | --- | --- | --- |
+| Desktop | `print-bridge-desktop` | Launch the GUI | Explicitly rejected |
+| Linux headless | `print-bridge-server` | Show CLI help | `print-bridge serve` explicitly starts the Agent |
+
+Linux desktop and headless packages conflict in both directions. They cannot be installed together and neither package automatically replaces the other. Headless installation creates the `printbridge` system user and enables a system-level systemd service.
+
+### Network Boundary
+
+The Axum router exposes only `GET /ws`. Configuration, printers, papers, logs, task history, and test printing have no REST API. WebSocket connections are checked against both the client IP allowlist and the browser Origin allowlist. Print jobs, query messages, ping/pong, and job-status events continue to use the existing WebSocket protocol.
+
 ## Product Boundaries
 
 PrintBridge is a local print agent. It is not a printer driver and does not replace the system print queue.
 
 - `service.host` remains a compatibility field with the value `127.0.0.1`; the service currently binds to `0.0.0.0:{port}`.
 - Browser-side print tasks are primarily submitted through WebSocket `/ws`.
-- The security model is based on an Origin allowlist.
+- The network security model combines a client IP allowlist with a WebSocket Origin allowlist.
 - The print queue is executed serially.
 - `submitted` / `success` means the job has been submitted to the system print queue. It does not mean that the printer has physically finished printing.
 - Windows uses the bundled SumatraPDF binary.
@@ -53,13 +156,13 @@ HTML mode supports `html` and `raw-html`: the local Agent downloads and renders 
 Install dependencies:
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 ```
 
 Start the Tauri development app:
 
 ```bash
-pnpm tauri dev
+pnpm --dir apps/desktop tauri dev
 ```
 
 Tauri also starts the Vite development server:
@@ -96,7 +199,7 @@ The allowlist validates the source page that opens the connection. It does not v
 
 ## CLI Operations
 
-PrintBridge provides a `print-bridge` CLI for viewing and modifying local configuration without opening the GUI. The CLI runs before the Tauri GUI starts. It does not depend on Tauri CLI plugins and does not require the local Agent service to be running.
+PrintBridge provides a `print-bridge` CLI for inspecting and changing functional state without opening the GUI. Desktop and headless share the Clap parser in `crates/cli`. Commands that permit offline execution can run without an Agent; `OnlineOnly` operations such as status, in-memory logs, connection tests, and test printing require a running Agent.
 
 ```bash
 print-bridge printer
@@ -122,250 +225,22 @@ print-bridge remote set-interval 10
 print-bridge task
 print-bridge task "JOB-001"
 print-bridge task clear
+print-bridge status
+print-bridge logs
+print-bridge test-remote
+print-bridge test-print
+
+# Available only in the Linux headless product
 print-bridge serve
-print-bridge serve install
-print-bridge serve uninstall
 ```
 
-The CLI reads and writes the same `config.json` used by the GUI, and reads the local `task_history.sqlite3`. It is useful for macOS/Linux headless machines, server installations, Raspberry Pi deployments, or other environments without a persistent GUI session.
+The CLI and GUI share the strongly typed `CommandService`; the GUI executes commands in process, while an external CLI calls a running Agent over local IPC. `serve` exists only in the Linux headless product.
 
-`print-bridge serve` is the long-running entrypoint. It starts the local HTTP/WebSocket server, the print queue worker, and the remote polling worker. It stays in the foreground and does not daemonize itself; production deployments should let systemd, launchd, Windows Service, or supervisor manage the process lifecycle. On Linux/macOS, use `print-bridge serve install` and `print-bridge serve uninstall` to install or remove the managed service. Windows does not provide these two commands.
+## Headless Linux deployment
 
-## Hosting `serve`
+`print-bridge serve` exists only in `print-bridge-server`. Installing the deb/rpm creates the `printbridge` system user and enables `print-bridge.service`; the desktop product rejects `serve`. GUI and headless packages conflict in both directions, upgrades preserve data, and only purge removes `/etc/print-bridge` and `/var/lib/print-bridge`.
 
-`print-bridge serve` is designed for fixed workstations without a GUI, small Linux hosts, macOS background login sessions, and server-style deployments. It still depends on the host operating system being able to see printers and submit jobs to the system print queue. If the system itself cannot print through `lpstat`, `lpoptions`, `lp`, or the Windows printing API, `serve` does not bypass that limitation.
-
-Choose the runtime mode by deployment scenario:
-
-| Scenario | Recommended mode | Notes |
-| --- | --- | --- |
-| Regular Windows/macOS desktop | Tauri GUI | Tray, windows, settings, auto update, and the user-session printer environment are handled by the desktop app |
-| Manual debugging or temporary run | `print-bridge serve` | Runs in the foreground and writes logs to the terminal |
-| Linux headless host | systemd user service | Suitable for Raspberry Pi, industrial PCs, and warehouse print hosts |
-| macOS background user session | launchd LaunchAgent | Runs with the login user session and is more likely to access that user's printers |
-| Windows unattended service | Windows Service wrapper | Requires separate validation that the service account can see the target printer |
-
-> **Note: the GUI and `print-bridge serve` are currently mutually exclusive.**
->
-> If a PrintBridge Agent is already using the configured local port, the second entrypoint exits immediately and does not start its own HTTP/WebSocket server, print queue worker, or remote polling worker. This prevents two processes from consuming the print queue or remote tasks at the same time.
->
-> Managing an already-running `serve` process from the GUI belongs to the future external Agent control mode. For now, stop the existing Agent before switching to the other entrypoint.
-
-### Paths and Environment Variables
-
-By default, the CLI and headless `serve` use the same data directory for `config.json`, `task_history.sqlite3`, and `remote.sqlite3`:
-
-| Platform | Default directory |
-| --- | --- |
-| Windows | `%APPDATA%\com.vergil.printbridge` |
-| macOS | `~/Library/Application Support/com.vergil.printbridge` |
-| Linux | `${XDG_CONFIG_HOME:-~/.config}/com.vergil.printbridge` |
-
-The paths can be overridden with environment variables:
-
-```bash
-PRINT_BRIDGE_DATA_DIR=/var/lib/printbridge
-PRINT_BRIDGE_CONFIG_PATH=/etc/printbridge/config.json
-```
-
-`PRINT_BRIDGE_CONFIG_PATH` only overrides the config file path. Task history and remote task state still use `PRINT_BRIDGE_DATA_DIR`. When `PRINT_BRIDGE_CONFIG_PATH` is not set, the config file defaults to `config.json` under the data directory.
-
-### Linux systemd
-
-On Linux, prefer a systemd user service so the Agent runs as the user that configured the printer. This keeps CUPS default printers, user permissions, and logs easier to reason about.
-
-Recommended install command:
-
-```bash
-print-bridge serve install
-```
-
-This writes the current `print-bridge` executable path to `~/.config/systemd/user/print-bridge.service`, then runs:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now print-bridge.service
-```
-
-Remove the service:
-
-```bash
-print-bridge serve uninstall
-```
-
-If you need to inspect or customize the service file manually, use the equivalent template below.
-
-Example file: `~/.config/systemd/user/print-bridge.service`
-
-```ini
-[Unit]
-Description=PrintBridge Agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/print-bridge serve
-Restart=on-failure
-RestartSec=3
-Environment=PRINT_BRIDGE_DATA_DIR=%h/.config/com.vergil.printbridge
-Environment=PRINT_BRIDGE_CONFIG_PATH=%h/.config/com.vergil.printbridge/config.json
-
-[Install]
-WantedBy=default.target
-```
-
-Enable it and view logs:
-
-```bash
-mkdir -p ~/.config/systemd/user
-systemctl --user daemon-reload
-systemctl --user enable --now print-bridge.service
-systemctl --user status print-bridge.service
-journalctl --user -u print-bridge.service -f
-```
-
-If the service must start even when the user is not logged in, an administrator needs to enable linger:
-
-```bash
-sudo loginctl enable-linger "$USER"
-```
-
-Linux printing depends on CUPS. Before deployment, verify that the same user can see and use the target printer:
-
-```bash
-lpstat -e
-lpoptions -d
-echo "PrintBridge test" | lp
-```
-
-### macOS launchd
-
-On macOS, prefer a LaunchAgent instead of a LaunchDaemon. A LaunchAgent runs with the login user session and is more likely to access that user's printers, keychain, and permission environment.
-
-Recommended install command:
-
-```bash
-print-bridge serve install
-```
-
-This writes the current `print-bridge` executable path to `~/Library/LaunchAgents/com.printbridge.agent.plist`, then loads and starts it with `launchctl`. Remove the service:
-
-```bash
-print-bridge serve uninstall
-```
-
-If you need to inspect or customize the plist manually, use the equivalent template below.
-
-Example file: `~/Library/LaunchAgents/com.printbridge.agent.plist`
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.printbridge.agent</string>
-
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/print-bridge</string>
-    <string>serve</string>
-  </array>
-
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PRINT_BRIDGE_DATA_DIR</key>
-    <string>/Users/USERNAME/Library/Application Support/com.vergil.printbridge</string>
-    <key>PRINT_BRIDGE_CONFIG_PATH</key>
-    <string>/Users/USERNAME/Library/Application Support/com.vergil.printbridge/config.json</string>
-  </dict>
-
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-
-  <key>StandardOutPath</key>
-  <string>/Users/USERNAME/Library/Logs/printbridge.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/USERNAME/Library/Logs/printbridge.err.log</string>
-</dict>
-</plist>
-```
-
-Replace `USERNAME` with the actual username, then load the service:
-
-```bash
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.printbridge.agent.plist
-launchctl kickstart -k "gui/$(id -u)/com.printbridge.agent"
-launchctl print "gui/$(id -u)/com.printbridge.agent"
-tail -f ~/Library/Logs/printbridge.log ~/Library/Logs/printbridge.err.log
-```
-
-Stop and unload it:
-
-```bash
-launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.printbridge.agent.plist
-```
-
-### Windows Service
-
-For regular Windows desktop use, keep using the Tauri GUI. `print-bridge serve install` and `print-bridge serve uninstall` are not provided on Windows. A Windows Service runs in a service session. Whether it can see printers depends on whether the printer is installed per-machine or per-user, which service account runs it, and whether the driver is available to that account. Do not assume a Windows Service can access every printer visible to the desktop user.
-
-If unattended operation is required, use WinSW, NSSM, or a similar wrapper to host the foreground command:
-
-```xml
-<service>
-  <id>PrintBridge</id>
-  <name>PrintBridge Agent</name>
-  <description>Runs print-bridge serve without the desktop UI.</description>
-  <executable>C:\Program Files\PrintBridge\print-bridge.exe</executable>
-  <arguments>serve</arguments>
-  <env name="PRINT_BRIDGE_DATA_DIR" value="C:\ProgramData\PrintBridge"/>
-  <env name="PRINT_BRIDGE_CONFIG_PATH" value="C:\ProgramData\PrintBridge\config.json"/>
-  <log mode="roll-by-size"/>
-</service>
-```
-
-Before deploying it, validate with the same service account:
-
-1. `print-bridge printer` lists the target printer
-2. `print-bridge printer set-default "Printer Name"` can write the config
-3. `print-bridge serve` starts and responds through `/health`
-4. A real print task reaches the system print queue
-
-If the target printer is only visible to the desktop login user, prefer the GUI tray app instead of a Windows Service.
-
-### Troubleshooting
-
-When `serve` starts successfully, it prints the config path, data directory, and listen address:
-
-```text
-PrintBridge serve started
-config: /path/to/config.json
-data: /path/to/data
-listen: 0.0.0.0:17890
-```
-
-Common checks:
-
-```bash
-curl http://127.0.0.1:17890/health
-print-bridge printer
-print-bridge task
-```
-
-If the service fails to start, check:
-
-- Whether the port is already in use
-- Whether the config file is valid JSON
-- Whether `PRINT_BRIDGE_CONFIG_PATH` and `PRINT_BRIDGE_DATA_DIR` are readable and writable
-- Whether CUPS is installed and enabled on Linux/macOS
-- Whether the runtime user can see the target printer
-- Whether the Origin allowlist and IP allowlist permit the caller
-- Whether the remote polling URL, token, and device ID are configured correctly
+The service uses `Type=notify`; config, state, and runtime directories are `/etc/print-bridge`, `/var/lib/print-bridge`, and `/run/print-bridge`. Diagnose with `systemctl status print-bridge`, `journalctl -u print-bridge`, or `print-bridge status`.
 
 ## Configuration Export and Import
 
@@ -428,25 +303,12 @@ The decrypted payload has this format:
 ERP systems or other tools that need to generate importable config files can refer to the PHP, Go, and Node implementations under `examples/config-transfer/`. The desktop project provides a shared verification command:
 
 ```bash
-pnpm verify:config-transfer-examples
+pnpm --dir apps/desktop verify:config-transfer-examples
 ```
 
-## HTTP API
+## Local management and WebSocket
 
-The HTTP API is mainly used by the desktop settings UI and diagnostics.
-
-```text
-GET  /health
-GET  /printers
-GET  /printers/{printer_name}/papers
-GET  /config
-POST /config
-GET  /logs
-POST /print/test
-GET  /ws
-```
-
-`POST /print/test` submits a calibration test page using the current default printer and paper. On success it returns `202 Accepted`. It is only allowed from the desktop settings UI Origin.
+The network router exposes only `GET /ws`. Desktop settings, config transfer, logs, task history, and test printing all use `CommandService`: the GUI uses in-process Tauri adapters and external CLI clients use local IPC. No REST API is provided. Check runtime status with `print-bridge status`, systemd notify, or WebSocket ping/pong.
 
 Configuration example:
 
@@ -607,7 +469,7 @@ HTML rendering does not bundle a browser. Every platform and runtime mode requir
 | macOS | Chrome → Chromium |
 | Linux | Chrome → Chromium |
 
-Both the GUI and `print-bridge serve`, including systemd/launchd-managed service deployments, follow this requirement. Without a usable browser, an HTML task returns a renderer-unavailable (`RendererUnavailable`) failure.
+Both the GUI and `print-bridge serve`, including systemd-managed headless package deployments, follow this requirement. Without a usable browser, an HTML task returns a renderer-unavailable (`RendererUnavailable`) failure.
 
 The proxy still safely blocks a rejected resource without `Referer` or `Origin`; however, it cannot reliably associate that request with the current HTML page. Task history may therefore omit `BlockedResource`, and the resulting PDF may omit that resource.
 
@@ -813,18 +675,18 @@ X-PrintBridge-Test: true
 Frontend checks:
 
 ```bash
-pnpm typecheck
-pnpm build
+pnpm --dir apps/desktop typecheck
+pnpm --dir apps/desktop lint
+pnpm --dir apps/desktop build
 ```
 
 Rust checks:
 
 ```bash
-cd src-tauri
-cargo fmt --check
-cargo check
-cargo clippy --tests -- -D warnings
-cargo test
+cargo fmt --all -- --check
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 Some Rust tests bind local TCP ports. If a sandbox or security tool blocks local networking, rerun the test from a normal terminal before treating it as a code failure.
@@ -834,7 +696,7 @@ Some Rust tests bind local TCP ports. If a sandbox or security tool blocks local
 Windows printing depends on the bundled SumatraPDF binary:
 
 ```text
-src-tauri/resources/windows/SumatraPDF.exe
+apps/desktop/src-tauri/resources/windows/SumatraPDF.exe
 ```
 
 The current resource is from SumatraPDF 3.6.1 64-bit portable:

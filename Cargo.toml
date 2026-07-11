@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/desktop/src-tauri",
+  "apps/server",
+  "crates/cli",
+  "crates/core",
+  "crates/runtime",
+]
+
+[workspace.package]
+version = "0.1.6"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Vergil Lai"]

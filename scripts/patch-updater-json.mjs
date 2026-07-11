@@ -65,7 +65,7 @@ async function main() {
 }
 
 function readPackageVersion() {
-  return JSON.parse(readFileSync('package.json', 'utf8')).version;
+  return JSON.parse(readFileSync('apps/desktop/package.json', 'utf8')).version;
 }
 
 function run(command, commandArgs, options = {}) {

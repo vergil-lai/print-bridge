@@ -1,0 +1,11 @@
+Package: print-bridge-server
+Version: \${VERSION}
+Section: utils
+Priority: optional
+Architecture: \${ARCH}
+Maintainer: Vergil Lai
+Depends: systemd, cups-client, libreoffice
+Provides: print-bridge
+Conflicts: print-bridge-desktop
+Description: Headless PrintBridge Agent
+ Runs PrintBridge as the dedicated printbridge system user.

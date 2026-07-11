@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+if ! getent group printbridge >/dev/null; then
+  addgroup --system printbridge
+fi
+if ! getent passwd printbridge >/dev/null; then
+  adduser --system --ingroup printbridge --no-create-home --home /var/lib/print-bridge printbridge
+fi
+install -d -o printbridge -g printbridge -m 0750 /etc/print-bridge /var/lib/print-bridge
+systemctl daemon-reload
+systemctl enable --now print-bridge.service

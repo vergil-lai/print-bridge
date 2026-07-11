@@ -6,7 +6,7 @@ settings:
 
 importers:
 
-  .:
+  apps/desktop:
     dependencies:
       '@lucide/vue':
         specifier: ^1.23.0

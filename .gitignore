@@ -17,6 +17,7 @@ CLAUDE.md
 large_tool_results
 .codegraph
 .worktrees
+/target/
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -1,1 +1,1 @@
-pnpm exec commitlint --edit "$1"
+pnpm --dir apps/desktop exec commitlint --edit "$1"

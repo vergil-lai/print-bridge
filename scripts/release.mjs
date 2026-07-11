@@ -61,9 +61,9 @@ async function releaseApp() {
   if (versionSet.size !== 1) {
     fail(
       `Version fields differ:\n` +
-        `  package.json: ${versions.packageJson}\n` +
-        `  src-tauri/tauri.conf.json: ${versions.tauriConf}\n` +
-        `  src-tauri/Cargo.toml: ${versions.cargoToml}`,
+        `  apps/desktop/package.json: ${versions.packageJson}\n` +
+        `  apps/desktop/src-tauri/tauri.conf.json: ${versions.tauriConf}\n` +
+        `  Cargo.toml workspace package: ${versions.cargoToml}`,
     );
   }
 
@@ -74,7 +74,8 @@ async function releaseApp() {
     fail(`Tag ${releaseTag} already exists.`);
   }
 
-  console.log('Release target: PrintBridge app');
+  console.log('Release target: PrintBridge desktop + headless server');
+  console.log('Artifacts: desktop installers, headless .deb and .rpm');
   console.log(`Repository: ${REPO}`);
   console.log(`Current app version: ${version}`);
   console.log(`Release tag: ${releaseTag}`);
@@ -94,12 +95,16 @@ async function releaseApp() {
 }
 
 function readAppVersions() {
-  const packageJson = JSON.parse(readFileSync('package.json', 'utf8')).version;
-  const tauriConf = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
-  const cargoToml = readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1];
+  const packageJson = JSON.parse(readFileSync('apps/desktop/package.json', 'utf8')).version;
+  const tauriConf = JSON.parse(
+    readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'),
+  ).version;
+  const cargoToml = readFileSync('Cargo.toml', 'utf8').match(
+    /^version = "([^"]+)"/m,
+  )?.[1];
 
   if (!packageJson || !tauriConf || !cargoToml) {
-    fail('Could not read version from package.json, tauri.conf.json, or Cargo.toml.');
+    fail('Could not read version from package.json, tauri.conf.json, or workspace Cargo.toml.');
   }
 
   return { packageJson, tauriConf, cargoToml };
@@ -169,10 +174,11 @@ function fail(message) {
 function printHelp() {
   console.log(`Usage: node scripts/release.mjs [app] [options]
 
-Release target: PrintBridge app.
+Release target: PrintBridge desktop installers and Linux headless deb/rpm artifacts.
 
-This script validates that package.json, src-tauri/tauri.conf.json, and
-src-tauri/Cargo.toml use the same version, then pushes the current commit to
+This script validates that apps/desktop/package.json,
+apps/desktop/src-tauri/tauri.conf.json, and apps/desktop/src-tauri/Cargo.toml
+use the same version, then pushes the current commit to
 origin/release. The existing GitHub Actions workflow creates the release tag
 with the printbridge-vX.Y.Z format.
 

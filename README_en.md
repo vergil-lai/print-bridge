@@ -17,7 +17,7 @@ PrintBridge does not replace printer drivers and does not bypass the operating s
 
 - Runs in the system tray and hides the main window by default
 - Supports Windows, macOS, and Linux, with Linux daemon and Docker support planned
-- Local HTTP/WebSocket service
+- Local WebSocket service and process-local management IPC
 - Website allowlist (Origin allowlist) to control which web pages may connect, for example `https://example.com`
 - IP allowlist to control which client addresses may access the local service, with single IP and CIDR support
 - Supports PDF, PNG/JPEG images, and Office(.docx/.xlsx/.pptx) files
@@ -81,7 +81,7 @@ HTML rendering does not bundle a browser. Every platform and runtime mode requir
 | macOS | Chrome → Chromium |
 | Linux | Chrome → Chromium |
 
-Both the GUI and `print-bridge serve`, including systemd/launchd-managed service deployments, follow this requirement. Without a usable browser, an HTML task fails with renderer-unavailable (`RendererUnavailable`).
+Both the GUI and the systemd-managed Linux headless product follow this requirement. Without a usable browser, an HTML task fails with renderer-unavailable (`RendererUnavailable`).
 
 ## Difference From Traditional Web Printing Controls
 
@@ -143,12 +143,11 @@ print-bridge remote enable
 print-bridge remote set-url "https://example.com/print-task"
 
 print-bridge task
-print-bridge serve
-print-bridge serve install
-print-bridge serve uninstall
 ```
 
-`print-bridge serve` starts the no-GUI Agent as a foreground process. On Linux/macOS, `print-bridge serve install` installs it as a systemd user service or launchd LaunchAgent, and `print-bridge serve uninstall` removes it. Windows does not provide these two commands; regular desktop deployments should keep using the GUI.
+The GUI and headless packages both expose the same `print-bridge` CLI but cannot be installed together. Only the Linux headless package provides `print-bridge serve`; installing its deb/rpm creates the dedicated `printbridge` system user and enables the systemd service automatically. There are no `serve install/uninstall` commands.
+
+The Cargo workspace separates pure models in `crates/core`, runtime workers and platform adapters in `crates/runtime`, and shared functional commands in `crates/cli`. `apps/desktop` contains the Vue + Tauri GUI and `apps/server` contains the Linux headless product. Desktop operations use local IPC and the network router exposes only `/ws`.
 
 The CLI reads and writes the same local configuration as the GUI and can inspect local task history. See the [technical documentation](docs/printbridge-technical_en.md#cli-operations) for the full command list.
 

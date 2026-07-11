@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PrintBridge",
+  "version": "0.1.6",
+  "identifier": "com.vergil.printbridge",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "PrintBridge",
+        "width": 960,
+        "height": 680,
+        "maxWidth": 960,
+        "maxHeight": 680,
+        "maximizable": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "linux": {
+      "rpm": {
+        "provides": ["print-bridge"],
+        "conflicts": ["print-bridge-server"]
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUzREM0MzUxOTIxM0UxNTIKUldSUzRST1NVVVBjVXhZWnd4NzZwNmpSV3hyNVFPYllWQnE0UVBZSjEwUmFzSzFwUkVuWXlKb1gK",
+      "endpoints": [
+        "https://github.com/vergil-lai/print-bridge/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

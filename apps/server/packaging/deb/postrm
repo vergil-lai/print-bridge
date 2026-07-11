@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+systemctl daemon-reload || true
+if [ "$1" = "purge" ]; then
+  rm -rf /etc/print-bridge /var/lib/print-bridge
+  if getent passwd printbridge >/dev/null; then
+    deluser --system printbridge || true
+  fi
+  if getent group printbridge >/dev/null; then
+    delgroup --system printbridge || true
+  fi
+fi

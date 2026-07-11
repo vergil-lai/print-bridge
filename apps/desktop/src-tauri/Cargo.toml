@@ -1,0 +1,51 @@
+[package]
+name = "print-bridge-desktop"
+version.workspace = true
+description = "Local printing bridge for trusted Web pages."
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "print_bridge_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "print-bridge"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+print-bridge-core = { path = "../../../crates/core" }
+print-bridge-cli = { path = "../../../crates/cli" }
+print-bridge-runtime = { path = "../../../crates/runtime" }
+tauri = { version = "=2.11.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "time", "process", "signal", "net", "io-util"] }
+uuid = { version = "1.23.4", features = ["v4", "serde"] }
+image = "0.25.10"
+tauri-plugin-process = "2"
+tauri-plugin-log = "2"
+tempfile = "3"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Printing",
+]
