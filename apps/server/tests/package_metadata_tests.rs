@@ -30,3 +30,19 @@ fn maintainer_scripts_preserve_data_except_on_purge() {
     assert!(postrm.contains("\"purge\""));
     assert!(!prerm.contains("rm -rf"));
 }
+
+#[test]
+fn rpm_spec_does_not_require_distribution_systemd_macros() {
+    let rpm = include_str!("../packaging/rpm/print-bridge.spec");
+
+    for unsupported_macro in [
+        "%{_unitdir}",
+        "%systemd_post",
+        "%systemd_preun",
+        "%systemd_postun_with_restart",
+    ] {
+        assert!(!rpm.contains(unsupported_macro), "unexpected {unsupported_macro}");
+    }
+    assert!(rpm.contains("/usr/lib/systemd/system/print-bridge.service"));
+    assert!(rpm.contains("systemctl daemon-reload"));
+}

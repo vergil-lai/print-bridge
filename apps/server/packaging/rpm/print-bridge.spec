@@ -12,23 +12,29 @@ Runs PrintBridge as the dedicated printbridge system user.
 
 %install
 install -D -m 0755 %{_sourcedir}/print-bridge %{buildroot}%{_bindir}/print-bridge
-install -D -m 0644 %{_sourcedir}/print-bridge.service %{buildroot}%{_unitdir}/print-bridge.service
+install -D -m 0644 %{_sourcedir}/print-bridge.service %{buildroot}/usr/lib/systemd/system/print-bridge.service
 
 %pre
 getent group printbridge >/dev/null || groupadd -r printbridge
 getent passwd printbridge >/dev/null || useradd -r -g printbridge -d /var/lib/print-bridge -s /sbin/nologin printbridge
 
 %post
-%systemd_post print-bridge.service
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable --now print-bridge.service >/dev/null 2>&1 || :
 
 %preun
-%systemd_preun print-bridge.service
+if [ "$1" -eq 0 ]; then
+  systemctl disable --now print-bridge.service >/dev/null 2>&1 || :
+fi
 
 %postun
-%systemd_postun_with_restart print-bridge.service
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ "$1" -ge 1 ]; then
+  systemctl try-restart print-bridge.service >/dev/null 2>&1 || :
+fi
 
 %files
 %{_bindir}/print-bridge
-%{_unitdir}/print-bridge.service
+/usr/lib/systemd/system/print-bridge.service
 
 %changelog
