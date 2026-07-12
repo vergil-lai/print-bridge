@@ -41,7 +41,10 @@ fn rpm_spec_does_not_require_distribution_systemd_macros() {
         "%systemd_preun",
         "%systemd_postun_with_restart",
     ] {
-        assert!(!rpm.contains(unsupported_macro), "unexpected {unsupported_macro}");
+        assert!(
+            !rpm.contains(unsupported_macro),
+            "unexpected {unsupported_macro}"
+        );
     }
     assert!(rpm.contains("/usr/lib/systemd/system/print-bridge.service"));
     assert!(rpm.contains("systemctl daemon-reload"));
