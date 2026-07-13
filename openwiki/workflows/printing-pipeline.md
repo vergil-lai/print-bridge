@@ -47,18 +47,22 @@ Once dequeued, each job follows this path:
 ```
 Pop from queue
     │
+    ├── Format = html / raw-html?
+    │   ├── html: validate file_url (absolute http/https) → render via Chrome/Chromium
+    │   └── raw-html: render inline HTML via Chrome/Chromium
+    │       └── Browser launches with filtering proxy → CDP PrintToPDF → temp PDF → print
+    │
     ├── Format = raw?
     │   ├── Yes → decode base64 → resolve printer → print_raw() → track status
-    │   └── No  → continue below
     │
-    ├── Download file_url to temp
+    ├── Download file_url to temp (pdf / image / office)
     │   ├── HTTP/HTTPS: stream with size enforcement (Content-Length + byte count)
     │   └── data: URL: base64-decode directly
     │
     ├── Resolve printer (specified or default) + paper (specified or default)
     │
-    ├── Convert to PDF if needed (prepare_printable_pdf)
-    │   ├── Office (docx/xlsx/pptx) → office_to_pdf() via office2pdf crate
+    ├── Convert to PDF if needed
+    │   ├── Office (docx/xlsx/pptx) → office_to_pdf() via LibreOffice or Windows COM
     │   ├── Image (PNG/JPEG) → image_to_pdf() via printpdf crate (fit-contain, 203 DPI)
     │   └── PDF → normalize_pdf_path() (ensure .pdf extension for print tools)
     │
@@ -98,7 +102,18 @@ Images are converted to single-page PDFs using the `printpdf` crate (`document.r
 
 ## Office → PDF Conversion
 
-Office documents (docx/xlsx/pptx) are converted via the `office2pdf` crate (`office.rs`, `office_to_pdf`). Print results depend on the conversion output — not guaranteed to match Microsoft Office, WPS, or LibreOffice rendering exactly.
+Office documents (docx/xlsx/pptx) are converted to PDF via the platform's native Office software (`office.rs` + `office/`). On macOS/Linux, LibreOffice (`soffice`/`libreoffice`) is invoked in an isolated profile with macro security level set to maximum. On Windows, the native Windows COM interface is used. Conversion has a 120-second timeout. Print results depend on LibreOffice rendering — not guaranteed to match Microsoft Office or WPS exactly.
+
+## HTML Rendering Pipeline
+
+HTML and raw-html jobs bypass the download stage. Instead, they are rendered to a temp PDF by the `HtmlRenderer` (default: `BrowserHtmlRenderer`):
+
+1. **Browser discovery** — finds Chrome, Chromium, or Edge in platform-specific locations
+2. **Filtering proxy** — a local HTTP proxy intercepts all browser resource requests. `ResourcePolicy` blocks non-public IPs (loopback, private, link-local, multicast, `file:`, `data:` schemes). DNS is resolved before connecting to prevent DNS rebinding.
+3. **Render** — the browser navigates to the target URL (or loads inline HTML), waits `wait_ms` milliseconds (default 1000, max 30000), then exports to PDF via CDP `Page.printToPDF`.
+4. The resulting temp PDF is submitted through the normal PDF print path, then cleaned up.
+
+If a blocked resource is detected, the render fails with `HtmlRenderError::BlockedResource` and the job is marked as failed.
 
 ## Download Safety (`download.rs`)
 
@@ -132,9 +147,10 @@ Both use `job_id` as the dedup key.
 
 | Area | File |
 |------|------|
-| Queue state + worker loop + job processing | `src-tauri/src/queue.rs` |
-| Format detection + image→PDF | `src-tauri/src/document.rs` |
-| Office detection + conversion | `src-tauri/src/office.rs` |
-| Download to temp | `src-tauri/src/download.rs` |
-| Platform print backends | `src-tauri/src/printing/mod.rs`, `cups.rs`, `windows.rs` |
-| Message validation | `src-tauri/src/protocol.rs` |
+| Queue state + worker loop + job processing | `crates/runtime/src/queue.rs` |
+| Format detection + image→PDF | `crates/runtime/src/document.rs` |
+| Office detection + conversion | `crates/runtime/src/office.rs`, `office/libreoffice.rs`, `office/windows.rs` |
+| HTML rendering (browser, proxy, policy) | `crates/runtime/src/html/` |
+| Download to temp | `crates/runtime/src/download.rs` |
+| Platform print backends | `crates/runtime/src/printing/mod.rs`, `cups.rs`, `windows.rs` |
+| Message validation + job types | `crates/core/src/protocol.rs` |

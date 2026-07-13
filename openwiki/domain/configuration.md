@@ -145,8 +145,9 @@ See [Security Model](security.md) for the encrypted config transfer format and c
 
 | Area | File |
 |------|------|
-| Config structs + defaults + load/save | `src-tauri/src/config.rs` |
-| Config encryption/decryption | `src-tauri/src/config_transfer.rs` |
-| Data dir resolution + env vars | `src-tauri/src/config.rs` (`cli_data_dir`, `cli_config_path`) |
-| Frontend config type | `src/types.ts` |
-| Frontend API calls | `src/api.ts` |
+| Config structs + defaults + load/save | `crates/core/src/config.rs` |
+| Config encryption/decryption | `crates/cli/src/config_transfer.rs` |
+| Data dir resolution + env vars | `crates/core/src/config.rs` |
+| System paths (headless) | `apps/server/src/paths.rs` |
+| Frontend config type | `apps/desktop/src/types.ts` |
+| Frontend API calls | `apps/desktop/src/api.ts` |

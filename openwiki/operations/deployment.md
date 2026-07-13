@@ -24,7 +24,10 @@ journalctl -u print-bridge -f
 ```bash
 sudo -u printbridge /usr/bin/print-bridge serve
 print-bridge status
+print-bridge doctor
 ```
+
+`doctor` 执行只读环境检查：配置有效性、数据目录权限、Agent IPC 可达性、端口可用性、打印机可见性、浏览器与 Office 转换器是否存在，以及远程连接可达性（headless 产品额外检查 systemd 服务状态）。
 
 没有 `print-bridge serve install` 或 `uninstall`。服务生命周期由包管理器维护；升级保留配置和状态，只有 purge 才删除数据。
 
@@ -38,6 +41,7 @@ GUI 与 headless 都占用 `/usr/bin/print-bridge`，因此软件包双向声明
 
 - `systemctl status print-bridge`
 - `print-bridge status`（本地 IPC）
+- `print-bridge doctor`（环境检查，见上文）
 - WebSocket `/ws` ping/pong
 - systemd `Type=notify` 的 READY/STOPPING 状态
 

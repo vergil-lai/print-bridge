@@ -154,7 +154,7 @@ All three:
 
 | Area | File |
 |------|------|
-| HTTP client (fetch + report + test) | `src-tauri/src/remote_client.rs` |
-| Task/batch protocol structures | `src-tauri/src/remote_protocol.rs` |
-| SQLite store (dedup + outbox) | `src-tauri/src/remote_store.rs` |
-| Worker loop (poll + report + backoff) | `src-tauri/src/remote_worker.rs` |
+| HTTP client (fetch + report + test) | `crates/runtime/src/remote_client.rs` |
+| Task/batch protocol structures | `crates/core/src/remote_protocol.rs` |
+| SQLite store (dedup + outbox) | `crates/runtime/src/remote_store.rs` |
+| Worker loop (poll + report + backoff) | `crates/runtime/src/remote_worker.rs` |

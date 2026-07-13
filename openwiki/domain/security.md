@@ -40,7 +40,7 @@ The server binds to `0.0.0.0:{port}` — all network interfaces. This allows LAN
 
 **Security implication:** If the machine is on an untrusted network, the service port is reachable. The IP whitelist is the primary defense — always keep it restrictive.
 
-## Config Transfer Encryption (`config_transfer.rs`)
+## Config Transfer Encryption (`crates/cli/src/config_transfer.rs`)
 
 Config export/import uses authenticated encryption for secure batch deployment of workstation configurations.
 
@@ -130,8 +130,8 @@ pnpm verify:config-transfer-examples
 
 | Area | File |
 |------|------|
-| IP whitelist logic | `src-tauri/src/ip_whitelist.rs` |
-| Config encryption/decryption | `src-tauri/src/config_transfer.rs` |
-| HTTP middleware (IP check) | `src-tauri/src/server.rs` (`ip_whitelist_middleware`) |
-| WebSocket Origin validation | `src-tauri/src/server.rs` (`ws_handler`) |
-| Config normalization (forced 127.0.0.1, IP normalization) | `src-tauri/src/config.rs` |
+| IP whitelist logic | `crates/core/src/ip_whitelist.rs` |
+| Config encryption/decryption | `crates/cli/src/config_transfer.rs` |
+| WebSocket middleware (IP check) | `crates/runtime/src/server.rs` (`ip_whitelist_middleware`) |
+| WebSocket Origin validation | `crates/runtime/src/server.rs` (`ws_handler`) |
+| Config normalization (forced 127.0.0.1, IP normalization) | `crates/core/src/config.rs` |

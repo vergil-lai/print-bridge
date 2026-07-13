@@ -1,25 +1,8 @@
 # Print Protocol & API
 
-PrintBridge exposes two communication channels: a WebSocket endpoint for real-time browser-initiated printing, and an HTTP REST API for settings UI, diagnostics, and printer discovery.
+PrintBridge exposes a WebSocket endpoint for real-time browser-initiated printing. Config, logs, printer discovery, and diagnostics are handled via Tauri commands (desktop) or CLI/local IPC (headless) — there is no HTTP REST API.
 
-The WebSocket protocol is the primary integration path for web pages. The HTTP API is primarily for the settings UI and diagnostic tools. Both are served by the same Axum server on `0.0.0.0:{port}` (default `17890`).
-
-## HTTP API
-
-All HTTP routes are subject to IP whitelist middleware. CORS is restricted to settings UI origins only (`localhost:1420`, `tauri://localhost`, `http://tauri.localhost`).
-
-| Route | Method | Purpose |
-|-------|--------|---------|
-| `/health` | GET | Health check → `{"status":"ok","service":"print-bridge"}` |
-| `/printers` | GET | List system printers |
-| `/printers/{name}/papers` | GET | List paper sizes for a specific printer |
-| `/config` | GET | Read current agent config |
-| `/config` | POST | Update agent config |
-| `/logs` | GET | Recent task log entries (in-memory ring buffer) |
-| `/print/test` | POST | Submit a calibration test page (settings UI Origin only) |
-| `/ws` | GET | WebSocket upgrade (see below) |
-
-**`POST /print/test`** uses the current default printer and paper to print a calibration page. Returns `202 Accepted`. Restricted to settings UI origins — external pages cannot trigger test prints.
+The WebSocket protocol is served by an Axum server on `0.0.0.0:{port}` (default `17890`). The router exposes only `/ws`; no other HTTP routes are available.
 
 ## WebSocket API
 
@@ -41,7 +24,7 @@ All messages are JSON with a `type` discriminator field (`#[serde(tag = "type")]
 | `get_printers_list` | — | Request list of available printers |
 | `get_printer_info` | `printer_name` | Request details for a specific printer |
 | `get_print_queue` | — | Request current print queue status |
-| `print` | `request_id`, `job_id`, `format`, `file_url`/`data_base64`, `printer_name?`, `copies?`, `paper?` | Submit a single print job |
+| `print` | `request_id`, `job` (format, `file_url`/`data_base64`/`html`, `printer_name?`, `copies?`, `paper?`, `wait_ms?`) | Submit a single print job |
 | `print_batch` | `request_id`, `batch_id`, `jobs[]` | Submit multiple jobs atomically |
 
 ### Server → Client Messages
@@ -111,6 +94,38 @@ Queued → Downloading → Printing → Submitted → Completed
 
 Raw jobs **do not** support `file_url`, `paper`, or `copies`. The `data_base64` bytes are submitted to the OS print queue as-is. PrintBridge does not parse or generate device commands (ESC/POS, TSPL, ZPL, EPL, PCL, PostScript).
 
+### HTML Print Job Example
+
+```json
+{
+  "type": "print",
+  "request_id": "REQ-HTML-001",
+  "job_id": "JOB-HTML-001",
+  "format": "html",
+  "file_url": "https://example.com/receipt.html",
+  "wait_ms": 2000
+}
+```
+
+HTML jobs render the page in a headless Chrome/Chromium/Edge browser, export to PDF, then submit via the normal PDF print path. The `file_url` must be an absolute `http` or `https` URL. The `wait_ms` field (default 1000, max 30000) controls how long the renderer waits for the page to settle before PDF export.
+
+All browser resource requests pass through a filtering proxy that blocks non-public network targets (loopback, private IPs, link-local, multicast). This prevents SSRF attacks from untrusted HTML pages.
+
+### Raw HTML Print Job Example
+
+```json
+{
+  "type": "print",
+  "request_id": "REQ-RAW-HTML-001",
+  "job_id": "JOB-RAW-HTML-001",
+  "format": "raw-html",
+  "html": "<h1>Shipping Label</h1><p>Order #12345</p>",
+  "wait_ms": 500
+}
+```
+
+`raw-html` jobs carry inline HTML instead of a URL. The same rendering pipeline (Chrome/Chromium via filtering proxy) applies. The inline HTML is loaded through the proxy as well, so any referenced resources (images, stylesheets) must be on public network targets.
+
 ### Batch Print Job Example
 
 ```json
@@ -125,7 +140,7 @@ Raw jobs **do not** support `file_url`, `paper`, or `copies`. The `data_base64` 
 }
 ```
 
-Batch jobs can mix PDF, image, Office, and raw formats. `batch_id` and all `job_id`s must be unique. Batch size is limited by `limits.max_batch_jobs` (default 20). Batch execution still uses the same serial queue — it is not concurrent printing.
+Batch jobs can mix PDF, image, Office, HTML, raw-html, and raw formats. `batch_id` and all `job_id`s must be unique. Batch size is limited by `limits.max_batch_jobs` (default 20). Batch execution still uses the same serial queue — it is not concurrent printing.
 
 ### Job Status Push
 
@@ -144,11 +159,13 @@ Batch jobs can mix PDF, image, Office, and raw formats. `batch_id` and all `job_
 | Format | Input | Conversion |
 |--------|-------|------------|
 | `pdf` | `file_url` or `data:application/pdf;base64,...` | None |
-| `image` | `file_url` | Image → PDF (fit-contain to paper size, 203 DPI) |
-| `docx` / `xlsx` / `pptx` | `file_url` (HTTP/HTTPS only) | Office → PDF via `office2pdf` |
+| `image` / `png` / `jpg` / `jpeg` | `file_url` | Image → PDF (fit-contain to paper size, 203 DPI) |
+| `docx` / `xlsx` / `pptx` | `file_url` (HTTP/HTTPS only) | Office → PDF via LibreOffice (macOS/Linux) or Windows COM |
+| `html` | `file_url` (absolute HTTP/HTTPS) | HTML → PDF via headless Chrome/Chromium with SSRF-protected proxy |
+| `raw-html` | `html` (inline string) | HTML → PDF via headless Chrome/Chromium with SSRF-protected proxy |
 | `raw` | `data_base64` | None — bytes submitted as-is |
 
-Office tasks only support HTTP(S) `file_url`, not data URLs.
+Office tasks only support HTTP(S) `file_url`, not data URLs. HTML tasks support an optional `wait_ms` field (0–30000ms, default 1000ms) that controls render wait time.
 
 ### Error Codes
 
@@ -177,9 +194,10 @@ Office tasks only support HTTP(S) `file_url`, not data URLs.
 
 | Area | File |
 |------|------|
-| HTTP routes + WS handler | `src-tauri/src/server.rs` |
-| Message types + validation + error codes | `src-tauri/src/protocol.rs` |
-| Per-connection status filtering | `src-tauri/src/protocol.rs` (`status_message_for_connection`) |
-| Batch acceptance + dedup | `src-tauri/src/queue.rs` (`accept_batch`) |
+| WS handler + IP middleware | `crates/runtime/src/server.rs` |
+| Message types + validation + error codes | `crates/core/src/protocol.rs` |
+| Per-connection status filtering | `crates/runtime/src/server.rs` |
+| Batch acceptance + dedup | `crates/runtime/src/queue.rs` |
+| HTML rendering | `crates/runtime/src/html/` |
 
 Detailed protocol examples are in `docs/printbridge-technical.md` (WebSocket API section). Browser integration should use the [print-bridge-sdk](https://github.com/vergil-lai/print-bridge-jssdk) which wraps this protocol.
