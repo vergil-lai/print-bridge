@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { rewriteUpdaterAssetUrls } from './patch-updater-json.mjs';
+import { rewriteUpdaterAssetUrls, rewriteUpdaterReleaseNotes } from './patch-updater-json.mjs';
 
 test('rewrites GitHub API asset URLs to browser download URLs', () => {
   const result = rewriteUpdaterAssetUrls(
@@ -29,5 +29,21 @@ test('rewrites GitHub API asset URLs to browser download URLs', () => {
   assert.equal(
     result.platforms['darwin-aarch64'].url,
     'https://github.com/vergil-lai/print-bridge/releases/download/printbridge-v0.1.2/PrintBridge_0.1.2_aarch64.app.tar.gz',
+  );
+});
+
+test('copies the GitHub release body into updater notes', () => {
+  const result = rewriteUpdaterReleaseNotes(
+    {
+      version: '0.2.0',
+      notes: 'placeholder',
+      platforms: {},
+    },
+    '## PrintBridge v0.2.0\n\n- Added Linux headless packages.',
+  );
+
+  assert.equal(
+    result.notes,
+    '## PrintBridge v0.2.0\n\n- Added Linux headless packages.',
   );
 });

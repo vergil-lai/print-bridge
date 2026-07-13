@@ -64,6 +64,7 @@ jobs:
             --target "$GITHUB_SHA"
             --title "PrintBridge v${VERSION}"
             --notes "See the assets to download and install this version."
+            --draft
           )
           if node scripts/release-version.mjs prerelease "$VERSION" | grep -qx true; then
             ARGS+=(--prerelease)
@@ -212,13 +213,13 @@ jobs:
           tagName: printbridge-v${{ steps.release_version.outputs.version }}
           releaseName: PrintBridge v${{ steps.release_version.outputs.version }}
           releaseBody: See the assets to download and install this version.
-          releaseDraft: false
+          releaseDraft: true
           prerelease: ${{ steps.release_version.outputs.prerelease }}
           args: ${{ matrix.args }}
           uploadUpdaterJson: ${{ matrix.upload_updater_json }}
           updaterJsonPreferNsis: true
 
-      - name: Patch updater download URLs
+      - name: Patch updater manifest
         if: matrix.upload_updater_json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

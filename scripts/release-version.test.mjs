@@ -39,6 +39,22 @@ test('release workflow installs AppImage tools and separates NSIS from MSI', () 
   assert.doesNotMatch(workflow, /--bundles nsis,msi/);
 });
 
+test('release workflow keeps the release as a draft until manual publication', () => {
+  const workflow = readFileSync('.github/workflows/release.yml', 'utf8');
+
+  assert.match(workflow, /gh release create/);
+  assert.match(workflow, /ARGS=\([\s\S]*--draft/);
+  assert.match(workflow, /releaseDraft: true/);
+});
+
+test('release note sync workflow updates updater notes after edits and publication', () => {
+  const workflow = readFileSync('.github/workflows/sync-release-notes.yml', 'utf8');
+
+  assert.match(workflow, /types: \[edited, published\]/);
+  assert.match(workflow, /printbridge-v/);
+  assert.match(workflow, /node scripts\/patch-updater-json\.mjs/);
+});
+
 test('headless packaging uses the normalized Linux package version', () => {
   const script = readFileSync('scripts/build-server-packages.sh', 'utf8');
   const controlTemplate = readFileSync('apps/server/packaging/deb/control', 'utf8');

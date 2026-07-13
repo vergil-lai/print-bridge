@@ -1,0 +1,43 @@
+name: sync release notes
+
+on:
+  release:
+    types: [edited, published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to synchronize
+        required: true
+        type: string
+
+jobs:
+  sync:
+    if: startsWith(github.event.release.tag_name || inputs.tag, 'printbridge-v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Check updater manifest
+        id: updater
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq 'any(.assets[]; .name == "latest.json")' | grep -qx true; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Release $RELEASE_TAG does not have latest.json yet; skipping synchronization."
+          fi
+
+      - name: Synchronize release notes
+        if: steps.updater.outputs.available == 'true'
+        run: node scripts/patch-updater-json.mjs "$RELEASE_TAG"

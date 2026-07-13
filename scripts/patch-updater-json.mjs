@@ -32,6 +32,12 @@ export function rewriteUpdaterAssetUrls(updaterJson, { assets }) {
   return nextJson;
 }
 
+export function rewriteUpdaterReleaseNotes(updaterJson, releaseBody) {
+  const nextJson = structuredClone(updaterJson);
+  nextJson.notes = releaseBody;
+  return nextJson;
+}
+
 async function main() {
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
   const tagName = process.argv[2] || `${TAG_PREFIX}${readPackageVersion()}`;
@@ -54,7 +60,10 @@ async function main() {
     run('gh', ['api', `repos/${repository}/releases/tags/${tagName}`]).stdout,
   );
   const updaterJson = JSON.parse(readFileSync(latestJsonPath, 'utf8'));
-  const patchedJson = rewriteUpdaterAssetUrls(updaterJson, { assets: release.assets ?? [] });
+  const updaterJsonWithUrls = rewriteUpdaterAssetUrls(updaterJson, {
+    assets: release.assets ?? [],
+  });
+  const patchedJson = rewriteUpdaterReleaseNotes(updaterJsonWithUrls, release.body ?? '');
 
   writeFileSync(latestJsonPath, `${JSON.stringify(patchedJson, null, 2)}\n`);
   run('gh', ['release', 'upload', tagName, latestJsonPath, '--repo', repository, '--clobber'], {
