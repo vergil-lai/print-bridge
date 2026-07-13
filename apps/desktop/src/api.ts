@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   AgentConfig,
+  CliIntegrationStatus,
   ExportConfigOptions,
   ImportPreview,
   PaperInfo,
@@ -51,6 +52,18 @@ export function testRemoteConnection(config: AgentConfig): Promise<void> {
 /** 读取当前桌面应用是否为 debug 构建。 */
 export function isDebugBuild(): Promise<boolean> {
   return invoke<boolean>('is_debug_build');
+}
+
+export function getCliIntegrationStatus(): Promise<CliIntegrationStatus> {
+  return invoke<CliIntegrationStatus>('get_cli_integration_status');
+}
+
+export function installCliIntegration(): Promise<CliIntegrationStatus> {
+  return invoke<CliIntegrationStatus>('install_cli_integration');
+}
+
+export function uninstallCliIntegration(): Promise<CliIntegrationStatus> {
+  return invoke<CliIntegrationStatus>('uninstall_cli_integration');
 }
 
 /** 读取本地 Agent 保留的最近任务日志。 */

@@ -1,5 +1,7 @@
 {
+  "mainBinaryName": "PrintBridge",
   "bundle": {
+    "externalBin": ["binaries/print-bridge"],
     "resources": {
       "resources/windows/SumatraPDF.exe": "SumatraPDF.exe"
     }

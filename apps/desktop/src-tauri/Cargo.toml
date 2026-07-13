@@ -1,5 +1,6 @@
 [package]
 name = "print-bridge-desktop"
+default-run = "print-bridge-desktop"
 version.workspace = true
 description = "Local printing bridge for trusted Web pages."
 authors.workspace = true
@@ -16,8 +17,12 @@ name = "print_bridge_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "print-bridge"
+name = "print-bridge-desktop"
 path = "src/main.rs"
+
+[[bin]]
+name = "print-bridge-desktop-cli"
+path = "src/cli_main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -50,4 +55,6 @@ version = "0.61"
 features = [
   "Win32_Foundation",
   "Win32_Graphics_Printing",
+  "Win32_System_Registry",
+  "Win32_UI_WindowsAndMessaging",
 ]

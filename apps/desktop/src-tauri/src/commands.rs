@@ -1,4 +1,5 @@
 use crate::{
+    cli_integration::{self, CliIntegrationStatus},
     config::{AgentConfig, MAX_SERVICE_PORT, MIN_SERVICE_PORT},
     logs::TaskLogEntry,
     state::AgentState,
@@ -29,6 +30,38 @@ pub async fn get_config(
 #[tauri::command]
 pub fn is_debug_build() -> bool {
     cfg!(debug_assertions)
+}
+
+/// 返回当前平台的命令行工具安装状态。
+#[tauri::command]
+pub async fn get_cli_integration_status() -> Result<CliIntegrationStatus, CommandError> {
+    run_cli_integration(cli_integration::status).await
+}
+
+/// 安装当前用户可管理的命令行工具入口。
+#[tauri::command]
+pub async fn install_cli_integration() -> Result<CliIntegrationStatus, CommandError> {
+    run_cli_integration(cli_integration::install).await
+}
+
+/// 移除当前用户可管理的命令行工具入口。
+#[tauri::command]
+pub async fn uninstall_cli_integration() -> Result<CliIntegrationStatus, CommandError> {
+    run_cli_integration(cli_integration::uninstall).await
+}
+
+async fn run_cli_integration(
+    operation: fn() -> Result<CliIntegrationStatus, String>,
+) -> Result<CliIntegrationStatus, CommandError> {
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| {
+            CommandError::new(
+                print_bridge_cli::CommandErrorKind::Runtime,
+                error.to_string(),
+            )
+        })?
+        .map_err(|error| CommandError::new(print_bridge_cli::CommandErrorKind::Runtime, error))
 }
 
 /// 应用应用层设置，并保存完整 Agent 配置。

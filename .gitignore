@@ -23,6 +23,7 @@ large_tool_results
 
 # Cargo workspace build output
 /target/
+/apps/desktop/src-tauri/binaries/*.exe
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

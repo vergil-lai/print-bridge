@@ -89,21 +89,21 @@ PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https:
 
 如果业务系统已经生成好 PDF、图片、Office 文件或 ESC/POS、TSPL、ZPL、EPL、PCL 等设备指令，PrintBridge 会更像一个稳定、可审计、可改造的本机打印桥接层。
 
-## 软件截图
+## 桌面版截图
 
 <p>
-  <img src="screenshots/1.png" alt="软件截图 1" width="49%">
-  <img src="screenshots/2.png" alt="软件截图 2" width="49%">
+  <img src="screenshots/1.png" alt="桌面版截图 1" width="49%">
+  <img src="screenshots/2.png" alt="桌面版截图 2" width="49%">
 </p>
 
 <p>
-  <img src="screenshots/3.png" alt="软件截图 3" width="49%">
-  <img src="screenshots/4.png" alt="软件截图 4" width="49%">
+  <img src="screenshots/3.png" alt="桌面版截图 3" width="49%">
+  <img src="screenshots/4.png" alt="桌面版截图 4" width="49%">
 </p>
 
 <p>
-  <img src="screenshots/5.png" alt="软件截图 5" width="49%">
-  <img src="screenshots/6.png" alt="软件截图 6" width="49%">
+  <img src="screenshots/5.png" alt="桌面版截图 5" width="49%">
+  <img src="screenshots/6.png" alt="桌面版截图 6" width="49%">
 </p>
 
 ## 安装
@@ -118,6 +118,8 @@ PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https:
 | Headless | Linux   | x86_64、ARM64        | `.deb`、`.rpm`              |
 
 Desktop 和 Headless 都安装同名的 `print-bridge` 命令，但属于互斥产品，不能在同一台机器上同时安装。Linux Headless 适合无桌面的服务器、树莓派、工控机和专用打印主机；安装 deb/rpm 后会自动创建 `printbridge` 系统用户并启用 systemd system service。
+
+Desktop 的“设置”页会显示命令行工具状态：macOS 可授权创建 `/usr/local/bin/print-bridge`；Windows 可把包含独立 console CLI 的安装目录加入当前用户 `PATH`，操作后需要重新打开终端；Linux deb/rpm 已自动提供 `/usr/bin/print-bridge`，因此不显示管理按钮；AppImage 可创建 `~/.local/bin/print-bridge` 用户级链接，如果该目录不在 `PATH` 中，需由用户自行加入。
 
 如果需要打印 Office 文件，还必须安装本机转换软件：
 

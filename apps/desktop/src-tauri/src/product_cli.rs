@@ -84,6 +84,8 @@ fn desktop_executable_path() -> Result<PathBuf, std::io::Error> {
         return Ok(PathBuf::from(path));
     }
     let executable = env::current_exe()?;
+    #[cfg(target_os = "windows")]
+    return Ok(windows_gui_executable_path(&executable));
     #[cfg(target_os = "macos")]
     {
         let executable = executable.canonicalize()?;
@@ -93,10 +95,35 @@ fn desktop_executable_path() -> Result<PathBuf, std::io::Error> {
         }
         Ok(executable)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Ok(executable)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_gui_executable_path(executable: &std::path::Path) -> PathBuf {
+    let value = executable.to_string_lossy();
+    if let Some(index) = value.rfind(['\\', '/']) {
+        return PathBuf::from(format!("{}PrintBridge.exe", &value[..=index]));
+    }
+    PathBuf::from("PrintBridge.exe")
 }
 
 fn runtime_error(error: impl ToString) -> CommandError {
     CommandError::new(CommandErrorKind::Runtime, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::windows_gui_executable_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn windows_cli_resolves_sibling_gui_for_autostart() {
+        assert_eq!(
+            windows_gui_executable_path(Path::new(
+                r"C:\Users\me\AppData\Local\PrintBridge\print-bridge.exe"
+            )),
+            PathBuf::from(r"C:\Users\me\AppData\Local\PrintBridge\PrintBridge.exe")
+        );
+    }
 }

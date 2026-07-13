@@ -16,6 +16,7 @@
     "format:check": "oxfmt --check \"src/**/*\" vite.config.ts tsconfig.json tsconfig.node.json",
     "lint-staged": "lint-staged",
     "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -45,13 +46,16 @@
     "@tailwindcss/vite": "^4.3.2",
     "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/test-utils": "^2.4.11",
     "husky": "^9.1.7",
+    "jsdom": "^26.1.0",
     "lint-staged": "^17.0.8",
     "oxfmt": "^0.57.0",
     "oxlint": "^1.72.0",
     "tailwindcss": "^4.3.2",
     "typescript": "~5.6.2",
     "vite": "^6.0.3",
+    "vitest": "^3.2.7",
     "vue-tsc": "^2.1.10"
   },
   "lint-staged": {

@@ -37,6 +37,8 @@ test('release workflow installs AppImage tools and separates NSIS from MSI', () 
   assert.match(workflow, /--bundles nsis\n/);
   assert.match(workflow, /--bundles msi\n/);
   assert.doesNotMatch(workflow, /--bundles nsis,msi/);
+  assert.match(workflow, /Prepare Windows CLI sidecar/);
+  assert.match(workflow, /prepare-windows-cli\.mjs x86_64-pc-windows-msvc/);
 });
 
 test('release workflow keeps the release as a draft until manual publication', () => {

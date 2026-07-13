@@ -6,7 +6,14 @@ use std::{
 
 use print_bridge_cli::{DoctorCheck, DoctorReport, DoctorStatus, ProductKind};
 
-use crate::{config::AgentConfig, state::AgentState};
+use crate::{
+    config::AgentConfig,
+    html::{
+        browser::{BrowserExecutable, BrowserLocator},
+        HtmlRenderError,
+    },
+    state::AgentState,
+};
 
 /// 执行不产生业务副作用的本地环境检查。
 pub async fn run_doctor(
@@ -21,11 +28,7 @@ pub async fn run_doctor(
         agent_check(listen_addr),
         port_check(&config, listen_addr),
         printer_check(state),
-        executable_check(
-            "browser.available",
-            browser_candidates(),
-            "Install Chrome or Chromium for HTML printing.",
-        ),
+        browser_check(BrowserLocator::new().find()),
         executable_check("office.available", office_candidates(), office_suggestion()),
     ];
     if product == ProductKind::Headless {
@@ -181,24 +184,29 @@ fn executable_check(code: &str, candidates: &[&str], suggestion: &str) -> Doctor
     }
 }
 
+/// 把 HTML 打印使用的浏览器探测结果转换为诊断项。
+fn browser_check(result: Result<BrowserExecutable, HtmlRenderError>) -> DoctorCheck {
+    match result {
+        Ok(browser) => check(
+            "browser.available",
+            DoctorStatus::Pass,
+            format!("Executable found at {}.", browser.path.display()),
+            None,
+        ),
+        Err(error) => check(
+            "browser.available",
+            DoctorStatus::Warn,
+            error.to_string(),
+            Some("Install Chrome or Chromium for HTML printing."),
+        ),
+    }
+}
+
 fn find_executable(candidates: &[&str]) -> Option<PathBuf> {
     let paths = env::var_os("PATH")?;
     env::split_paths(&paths)
         .flat_map(|directory| candidates.iter().map(move |name| directory.join(name)))
         .find(|path| path.is_file())
-}
-
-#[cfg(target_os = "windows")]
-fn browser_candidates() -> &'static [&'static str] {
-    &["chrome.exe", "msedge.exe"]
-}
-#[cfg(target_os = "macos")]
-fn browser_candidates() -> &'static [&'static str] {
-    &["Google Chrome", "Chromium"]
-}
-#[cfg(all(unix, not(target_os = "macos")))]
-fn browser_candidates() -> &'static [&'static str] {
-    &["google-chrome", "chromium", "chromium-browser"]
 }
 
 #[cfg(target_os = "windows")]
@@ -277,5 +285,25 @@ fn check(
         status,
         message: message.into(),
         suggestion: suggestion.map(str::to_string),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::html::browser::{BrowserExecutable, BrowserKind};
+
+    #[test]
+    fn browser_check_reports_the_browser_selected_by_html_printing() {
+        let browser = BrowserExecutable {
+            kind: BrowserKind::Chrome,
+            path: PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            label: "chrome",
+        };
+
+        let result = browser_check(Ok(browser));
+
+        assert_eq!(result.status, DoctorStatus::Pass);
+        assert!(result.message.contains("Google Chrome.app"));
     }
 }

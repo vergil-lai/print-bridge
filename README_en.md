@@ -89,21 +89,21 @@ PrintBridge is not a traditional Web printing control. Products such as [C-Lodop
 
 If your business system already generates PDF files, images, Office files, or device commands such as ESC/POS, TSPL, ZPL, EPL, and PCL, PrintBridge acts as a stable, auditable, and customizable bridge to the local print queue.
 
-## Screenshots
+## Desktop Screenshots
 
 <p>
-  <img src="screenshots/1.png" alt="Screenshot 1" width="49%">
-  <img src="screenshots/2.png" alt="Screenshot 2" width="49%">
+  <img src="screenshots/1.png" alt="Desktop Screenshot 1" width="49%">
+  <img src="screenshots/2.png" alt="Desktop Screenshot 2" width="49%">
 </p>
 
 <p>
-  <img src="screenshots/3.png" alt="Screenshot 3" width="49%">
-  <img src="screenshots/4.png" alt="Screenshot 4" width="49%">
+  <img src="screenshots/3.png" alt="Desktop Screenshot 3" width="49%">
+  <img src="screenshots/4.png" alt="Desktop Screenshot 4" width="49%">
 </p>
 
 <p>
-  <img src="screenshots/5.png" alt="Screenshot 5" width="49%">
-  <img src="screenshots/6.png" alt="Screenshot 6" width="49%">
+  <img src="screenshots/5.png" alt="Desktop Screenshot 5" width="49%">
+  <img src="screenshots/6.png" alt="Desktop Screenshot 6" width="49%">
 </p>
 
 ## Installation
@@ -118,6 +118,8 @@ Download the latest version from [Releases](https://github.com/vergil-lai/print-
 | Headless | Linux | x86_64, ARM64 | `.deb`, `.rpm` |
 
 Desktop and Headless both install the `print-bridge` command, but they are mutually exclusive products and cannot be installed on the same machine. Linux Headless is intended for servers without a desktop, Raspberry Pi devices, industrial computers, and dedicated print hosts. Installing its deb/rpm creates the `printbridge` system user and enables the systemd system service automatically.
+
+The Desktop Settings tab shows command-line tool status: macOS can create `/usr/local/bin/print-bridge` after administrator authorization; Windows can add the directory containing the separate console CLI to the current user's `PATH`, after which the terminal must be reopened; Linux deb/rpm already provides `/usr/bin/print-bridge`, so no management buttons are shown; AppImage can create the user-level `~/.local/bin/print-bridge` link, and users must add that directory to `PATH` themselves when necessary.
 
 Printing Office files also requires locally installed conversion software:
 

@@ -3,6 +3,7 @@ pub use print_bridge_runtime::{
     remote_store, remote_worker, server, state, task_history, test_print,
 };
 pub mod cli;
+pub mod cli_integration;
 pub mod commands;
 mod product_cli;
 pub use print_bridge_core::{config, ip_whitelist, protocol, remote_protocol};
@@ -120,6 +121,9 @@ pub fn run() {
             commands::list_printers,
             commands::list_papers,
             commands::is_debug_build,
+            commands::get_cli_integration_status,
+            commands::install_cli_integration,
+            commands::uninstall_cli_integration,
             commands::print_test
         ])
         .run(tauri::generate_context!())

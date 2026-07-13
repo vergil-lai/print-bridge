@@ -4,6 +4,21 @@ export interface EffectivePaper {
   height_mm: number;
 }
 
+export type CliIntegrationStatusKind =
+  | 'not_installed'
+  | 'installed'
+  | 'installed_system'
+  | 'stale'
+  | 'conflict'
+  | 'unavailable'
+  | 'unsupported';
+
+export interface CliIntegrationStatus {
+  kind: CliIntegrationStatusKind;
+  command_path: string | null;
+  path_ready: boolean;
+}
+
 /** Tauri UI 和本地 Agent 共享的完整配置。 */
 export interface AgentConfig {
   service: {

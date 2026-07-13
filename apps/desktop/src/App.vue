@@ -27,17 +27,21 @@ import {
   fetchPrinters,
   clearTaskHistory,
   getConfig,
+  getCliIntegrationStatus,
   getTaskHistory,
   getTaskHistoryEvents,
   importConfigFile,
   isDebugBuild,
+  installCliIntegration,
   printTestPage,
   previewConfigImport,
   saveConfig,
   testRemoteConnection,
+  uninstallCliIntegration,
 } from '@/api';
 import type {
   AgentConfig,
+  CliIntegrationStatus,
   EffectivePaper,
   ExportConfigOptions,
   ImportPreview,
@@ -84,6 +88,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import CliIntegrationRow from '@/components/CliIntegrationRow.vue';
 import { DEFAULT_UI_LANGUAGE, isUiLanguage, setI18nLocale, type UiLanguage } from '@/i18n';
 
 const DEFAULT_PAPER: EffectivePaper = {
@@ -151,6 +156,8 @@ const importErrorMessage = ref('');
 const exportOptions = ref<ExportConfigOptions>(defaultExportOptions());
 const testingPrint = ref(false);
 const testingRemote = ref(false);
+const cliIntegrationStatus = ref<CliIntegrationStatus | null>(null);
+const changingCliIntegration = ref(false);
 const activePort = ref<number | null>(null);
 const appVersion = ref('-');
 const updateStatus = ref<UpdateStatus>('idle');
@@ -1060,6 +1067,29 @@ async function openReleaseNotes(): Promise<void> {
   }
 }
 
+async function loadCliIntegrationStatus(): Promise<void> {
+  try {
+    cliIntegrationStatus.value = await getCliIntegrationStatus();
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('cliOperationFailed');
+  }
+}
+
+async function changeCliIntegration(action: 'install' | 'uninstall'): Promise<void> {
+  changingCliIntegration.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    cliIntegrationStatus.value =
+      action === 'install' ? await installCliIntegration() : await uninstallCliIntegration();
+    successMessage.value = t(action === 'install' ? 'cliInstalled' : 'cliUninstalled');
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('cliOperationFailed');
+  } finally {
+    changingCliIntegration.value = false;
+  }
+}
+
 applyTheme(themeMode.value);
 
 onMounted(() => {
@@ -1067,6 +1097,7 @@ onMounted(() => {
   setupThemeSync();
   void loadConfig();
   void loadAppVersion();
+  void loadCliIntegrationStatus();
 });
 
 onBeforeUnmount(() => {
@@ -1169,10 +1200,7 @@ onBeforeUnmount(() => {
 
         <TabsContent value="settings" class="mt-2">
           <Card>
-            <CardHeader class="pb-3">
-              <CardTitle class="text-base"> {{ t('printSettings') }} </CardTitle>
-            </CardHeader>
-            <CardContent class="grid gap-5">
+            <CardContent class="grid gap-3 px-4 pt-2 pb-4">
               <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
                 <div class="grid gap-2">
                   <Label for="default-printer">{{ t('defaultPrinter') }}</Label>
@@ -1297,7 +1325,7 @@ onBeforeUnmount(() => {
 
               <Separator />
 
-              <div class="grid gap-4 rounded-md border px-3 py-3 md:grid-cols-2">
+              <div class="grid gap-3 rounded-md border px-3 py-2 md:grid-cols-2">
                 <div class="grid gap-2">
                   <Label>{{ t('appearance') }}</Label>
                   <div
@@ -1360,19 +1388,25 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
+
+              <CliIntegrationRow
+                v-if="cliIntegrationStatus"
+                :status="cliIntegrationStatus"
+                :loading="changingCliIntegration"
+                @install="changeCliIntegration('install')"
+                @uninstall="changeCliIntegration('uninstall')"
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="remote" class="mt-2">
           <Card>
-            <CardHeader class="pb-3">
+            <CardContent class="grid gap-5 pt-6">
               <div class="flex items-center justify-between gap-3">
-                <CardTitle class="text-base"> {{ t('remoteTasks') }} </CardTitle>
+                <Label for="remote-enabled">{{ t('enableRemoteTasks') }}</Label>
                 <Switch id="remote-enabled" v-model="config.remote.enabled" />
               </div>
-            </CardHeader>
-            <CardContent class="grid gap-5">
               <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <div class="grid min-w-0 gap-2">
                   <Label for="remote-url">{{ t('taskUrl') }}</Label>
@@ -1465,10 +1499,7 @@ onBeforeUnmount(() => {
 
         <TabsContent value="website-whitelist" class="mt-2">
           <Card>
-            <CardHeader class="pb-3">
-              <CardTitle class="text-base"> {{ t('websiteWhitelist') }} </CardTitle>
-            </CardHeader>
-            <CardContent class="grid gap-4">
+            <CardContent class="grid gap-4 pt-6">
               <form class="flex items-start gap-2" @submit.prevent="addOrigin">
                 <div class="grid flex-1 gap-1">
                   <Input
@@ -1512,10 +1543,7 @@ onBeforeUnmount(() => {
 
         <TabsContent value="ip-whitelist" class="mt-2">
           <Card>
-            <CardHeader class="pb-3">
-              <CardTitle class="text-base"> {{ t('ipWhitelist') }} </CardTitle>
-            </CardHeader>
-            <CardContent class="grid gap-4">
+            <CardContent class="grid gap-4 pt-6">
               <form class="flex items-start gap-2" @submit.prevent="addAllowedIp">
                 <div class="grid flex-1 gap-1">
                   <Input
@@ -1554,15 +1582,10 @@ onBeforeUnmount(() => {
         </TabsContent>
 
         <TabsContent value="updates" class="mt-2">
-          <div class="grid gap-4">
-            <div>
-              <h2 class="text-base font-semibold tracking-normal">{{ t('about') }}</h2>
-              <p class="text-sm text-muted-foreground">{{ t('aboutSubtitle') }}</p>
-            </div>
-
+          <div>
             <Card>
               <CardContent class="grid gap-5 p-5">
-                <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
                   <div class="flex min-w-0 items-start gap-3">
                     <img :src="appIcon" alt="" class="mt-1 size-10 rounded-md" />
                     <div class="min-w-0">
@@ -1574,7 +1597,7 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
 
-                  <div class="flex flex-wrap gap-2 md:justify-end">
+                  <div class="flex flex-wrap gap-2 md:shrink-0 md:flex-nowrap md:justify-end">
                     <Button variant="outline" @click="openGitHubRepository">
                       <ExternalLink class="size-4" />
                       GitHub
