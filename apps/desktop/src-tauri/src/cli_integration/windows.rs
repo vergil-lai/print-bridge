@@ -54,7 +54,11 @@ mod platform {
     const MACHINE_ENVIRONMENT: &str =
         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
 
-    pub(super) fn status() -> Result<CliIntegrationStatus, String> {
+    fn os_error(code: u32) -> String {
+        io::Error::from_raw_os_error(code as i32).to_string()
+    }
+
+    pub(crate) fn status() -> Result<CliIntegrationStatus, String> {
         let directory = install_directory()?;
         let cli = directory.join("print-bridge.exe");
         if !cli.is_file() {
@@ -82,7 +86,7 @@ mod platform {
         })
     }
 
-    pub(super) fn install() -> Result<CliIntegrationStatus, String> {
+    pub(crate) fn install() -> Result<CliIntegrationStatus, String> {
         let directory = install_directory()?;
         if !directory.join("print-bridge.exe").is_file() {
             return status();
@@ -94,7 +98,7 @@ mod platform {
         status()
     }
 
-    pub(super) fn uninstall() -> Result<CliIntegrationStatus, String> {
+    pub(crate) fn uninstall() -> Result<CliIntegrationStatus, String> {
         let directory = install_directory()?;
         let entry = directory.display().to_string();
         let (value, kind) = read_path(HKEY_CURRENT_USER, USER_ENVIRONMENT, true)?;
@@ -121,7 +125,7 @@ mod platform {
             let access = KEY_READ | if writable { KEY_SET_VALUE } else { 0 };
             let code = RegOpenKeyExW(root, wide(subkey).as_ptr(), 0, access, &mut key);
             if code != ERROR_SUCCESS {
-                return Err(io::Error::from_raw_os_error(code).to_string());
+                return Err(os_error(code));
             }
             let name = wide("Path");
             let mut kind = REG_EXPAND_SZ;
@@ -140,7 +144,7 @@ mod platform {
             }
             if code != ERROR_SUCCESS {
                 RegCloseKey(key);
-                return Err(io::Error::from_raw_os_error(code).to_string());
+                return Err(os_error(code));
             }
             let mut buffer = vec![0u16; length as usize / 2];
             let code = RegQueryValueExW(
@@ -153,7 +157,7 @@ mod platform {
             );
             RegCloseKey(key);
             if code != ERROR_SUCCESS {
-                return Err(io::Error::from_raw_os_error(code).to_string());
+                return Err(os_error(code));
             }
             while buffer.last() == Some(&0) {
                 buffer.pop();
@@ -173,7 +177,7 @@ mod platform {
                 &mut key,
             );
             if code != ERROR_SUCCESS {
-                return Err(io::Error::from_raw_os_error(code).to_string());
+                return Err(os_error(code));
             }
             let encoded = wide(value);
             let value_kind = if kind == REG_SZ {
@@ -193,7 +197,7 @@ mod platform {
             if code == ERROR_SUCCESS {
                 Ok(())
             } else {
-                Err(io::Error::from_raw_os_error(code).to_string())
+                Err(os_error(code))
             }
         }
     }
@@ -216,7 +220,7 @@ mod platform {
 }
 
 #[cfg(target_os = "windows")]
-pub(super) use platform::{install, status, uninstall};
+pub(crate) use platform::{install, status, uninstall};
 
 #[cfg(test)]
 mod tests {

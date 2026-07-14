@@ -204,7 +204,7 @@ struct PowerShellPrinter {
     #[serde(rename = "Name")]
     name: String,
     #[serde(rename = "Default", default)]
-    default: bool,
+    default: Option<bool>,
     #[serde(rename = "PortName", default)]
     port_name: Option<String>,
     #[serde(rename = "Type", default)]
@@ -254,7 +254,7 @@ impl From<PowerShellPrinter> for PrinterInfo {
 
         Self {
             name: value.name,
-            is_default: value.default,
+            is_default: value.default.unwrap_or(false),
             dpi,
             port,
             is_local,
@@ -361,5 +361,22 @@ fn command_error(command: &str, message: String) -> PrintError {
     PrintError::CommandFailed {
         command: command.to_string(),
         message,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_printers_json;
+
+    #[test]
+    fn parse_printers_json_accepts_null_default_flag() {
+        let printers = parse_printers_json(
+            r#"[{"Name":"Printer A","Default":null,"PortName":"USB001","Type":"Local","DeviceType":"Print","DriverName":"Driver"}]"#,
+        )
+        .unwrap();
+
+        assert_eq!(printers.len(), 1);
+        assert!(!printers[0].is_default);
+        assert_eq!(printers[0].name, "Printer A");
     }
 }

@@ -79,19 +79,17 @@ pub async fn save_config(
         )?;
     }
 
-    apply_autostart(&app, config.app.autostart).map_err(|message| {
-        CommandError::new(print_bridge_cli::CommandErrorKind::Runtime, message)
-    })?;
     let saved = match service.execute(Command::SaveConfig(config)).await? {
         CommandResult::Config(config) => *config,
         _ => unreachable!("SaveConfig returned an unexpected result"),
     };
-    apply_tray_language(&app, saved.app.language).map_err(|error| {
-        CommandError::new(
-            print_bridge_cli::CommandErrorKind::Runtime,
-            error.to_string(),
-        )
-    })?;
+
+    if let Err(error) = apply_autostart(&app, saved.app.autostart) {
+        tauri_plugin_log::log::warn!("failed to sync autostart after save: {error}");
+    }
+    if let Err(error) = apply_tray_language(&app, saved.app.language) {
+        tauri_plugin_log::log::warn!("failed to sync tray language after save: {error}");
+    }
 
     Ok(saved)
 }
