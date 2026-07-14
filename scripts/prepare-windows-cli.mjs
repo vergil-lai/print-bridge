@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { copyFileSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,22 +42,29 @@ export function sidecarBuildEnvironment(environment = process.env) {
   };
 }
 
-export function prepareWindowsCli(target, repositoryRoot = root) {
+export function prepareWindowsCli(target, repositoryRoot = root, runCargo = spawnSync) {
   validateWindowsTarget(target);
-  const result = spawnSync('cargo', sidecarCargoArgs(target), {
+  const result = runCargo('cargo', sidecarCargoArgs(target), {
     cwd: repositoryRoot,
     env: sidecarBuildEnvironment(),
     stdio: 'inherit',
   });
-  if (result.status !== 0) process.exit(result.status ?? 1);
-
-  const source = resolve(repositoryRoot, 'target', target, 'release', 'print-bridge-desktop-cli.exe');
   const destination = sidecarOutputPath(repositoryRoot, target);
   mkdirSync(dirname(destination), { recursive: true });
-  copyFileSync(source, destination);
+  if (result.status !== 0) return result.status ?? 1;
+
+  const source = resolve(repositoryRoot, 'target', target, 'release', 'print-bridge-desktop-cli.exe');
+  const temporary = `${destination}.${randomUUID()}.tmp`;
+  try {
+    copyFileSync(source, temporary);
+    renameSync(temporary, destination);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
   console.log(`Prepared Windows CLI sidecar: ${destination}`);
+  return 0;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  prepareWindowsCli(process.argv[2] ?? '');
+  process.exitCode = prepareWindowsCli(process.argv[2] ?? '');
 }
