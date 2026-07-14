@@ -60,7 +60,7 @@ impl BrowserKind {
     }
 }
 
-/// 已通过版本探测的浏览器可执行文件。
+/// 可用于启动渲染器的浏览器可执行文件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserExecutable {
     pub kind: BrowserKind,
@@ -160,7 +160,7 @@ impl BrowserLocator {
         Self { os, probe }
     }
 
-    /// 返回优先级最高、并能成功返回版本号的浏览器。
+    /// 返回当前平台优先级最高且可用的浏览器。
     pub fn find(&self) -> Result<BrowserExecutable, HtmlRenderError> {
         let candidates = self.candidates();
         let searched = candidates
@@ -168,9 +168,13 @@ impl BrowserLocator {
             .map(|(_, candidate)| candidate.display().to_string())
             .collect::<Vec<_>>();
         for (kind, path) in candidates {
-            if (self.os == TargetOs::Linux || self.probe.is_file(&path))
-                && self.probe.has_version(&path)
-            {
+            // Windows 和 macOS 不再仅为查询版本启动浏览器，避免激活用户已有窗口。
+            // 后续实际的 headless 启动才是最终可用性检查。
+            let available = match self.os {
+                TargetOs::Windows | TargetOs::MacOs => self.probe.is_file(&path),
+                TargetOs::Linux => self.probe.has_version(&path),
+            };
+            if available {
                 return Ok(BrowserExecutable {
                     kind,
                     path,
