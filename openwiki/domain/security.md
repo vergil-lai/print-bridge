@@ -1,65 +1,65 @@
-# Security Model
+# 安全模型
 
-PrintBridge runs on the user's local computer and can access local printers. Security is enforced through a dual-allowlist architecture (IP + Origin), encrypted config transfer for deployment, and clear trust boundaries.
+PrintBridge 运行在用户的本地电脑上，可以访问本地打印机。安全通过双层白名单架构（IP + Origin）、用于部署的加密配置传输和清晰的信任边界来保障。
 
-## Dual Allowlist Architecture
+## 双层白名单架构
 
-All requests must pass **both** layers of access control:
+所有请求必须通过**两层**访问控制：
 
 ```
-Incoming request (HTTP or WebSocket)
+传入请求（HTTP 或 WebSocket）
     │
-    ├── Layer 1: IP Whitelist Middleware (all routes)
-    │   Extract client IP from Axum ConnectInfo<SocketAddr>
-    │   → Reject if not in allowed_ips
+    ├── 第 1 层：IP 白名单中间件（所有路由）
+    │   从 Axum ConnectInfo<SocketAddr> 提取客户端 IP
+    │   → 不在 allowed_ips 中则拒绝
     │
-    └── Layer 2: WebSocket Origin Check (/ws only)
-        Validate Origin header against allowed_origins
-        → Reject WebSocket upgrade if Origin not in list
+    └── 第 2 层：WebSocket Origin 检查（仅 /ws）
+        根据 allowed_origins 校验 Origin 头
+        → Origin 不在列表中则拒绝 WebSocket 升级
 ```
 
-### IP Whitelist (`ip_whitelist.rs`)
+### IP 白名单（`ip_whitelist.rs`）
 
-- **`127.0.0.1` is always present and cannot be removed** (`REQUIRED_LOOPBACK_IP`)
-- All loopback IPs (`is_loopback()`) are always allowed regardless of the list
-- Supports individual IPv4/IPv6 addresses and CIDR ranges (via `ipnet` crate)
-- **Rejects:** `0.0.0.0`, `::`, `0.0.0.0/0`, `::/0`, and any `/0` prefix — no allow-all entries
-- Client IP is extracted from Axum `ConnectInfo` only — **`X-Forwarded-For` and other proxy headers are not trusted**
-- No wildcard or range syntax — use CIDR notation for ranges
+- **`127.0.0.1` 始终存在且不可移除**（`REQUIRED_LOOPBACK_IP`）
+- 所有回环 IP（`is_loopback()`）无论列表如何始终允许
+- 支持单个 IPv4/IPv6 地址和 CIDR 范围（通过 `ipnet` crate）
+- **拒绝：** `0.0.0.0`、`::`、`0.0.0.0/0`、`::/0` 以及任何 `/0` 前缀——不允许允许所有条目
+- 客户端 IP 仅从 Axum `ConnectInfo` 提取——**不信任 `X-Forwarded-For` 和其他代理头**
+- 不支持通配符或范围语法——范围请使用 CIDR 表示法
 
-### Origin Allowlist (`config.security.allowed_origins`)
+### Origin 白名单（`config.security.allowed_origins`）
 
-- Validates the browser page's `Origin` header (protocol + host + port)
-- **Must match exactly** — `https://example.com` ≠ `https://example.com:443` ≠ `http://example.com`
-- Only validates the **connecting page's origin**, not the file URL's domain
-- Applied at WebSocket handshake time (`server.rs`, `ws_handler`)
+- 校验浏览器页面的 `Origin` 头（协议 + 主机 + 端口）
+- **必须精确匹配**——`https://example.com` ≠ `https://example.com:443` ≠ `http://example.com`
+- 仅校验**连接页面的 origin**，而非文件 URL 的域名
+- 在 WebSocket 握手时应用（`server.rs`、`ws_handler`）
 
-## Network Binding
+## 网络绑定
 
-The server binds to `0.0.0.0:{port}` — all network interfaces. This allows LAN devices to connect to the agent. The `service.host` field in config is a compatibility placeholder (`127.0.0.1`) and does not control binding.
+服务器绑定到 `0.0.0.0:{port}`——所有网络接口。这允许局域网设备连接到代理。配置中的 `service.host` 字段是兼容占位符（`127.0.0.1`），不控制绑定。
 
-**Security implication:** If the machine is on an untrusted network, the service port is reachable. The IP whitelist is the primary defense — always keep it restrictive.
+**安全影响：** 如果机器位于不受信任的网络上，服务端口是可达的。IP 白名单是主要防线——始终保持其限制性。
 
-## Config Transfer Encryption (`crates/cli/src/config_transfer.rs`)
+## 配置传输加密（`crates/cli/src/config_transfer.rs`）
 
-Config export/import uses authenticated encryption for secure batch deployment of workstation configurations.
+配置导出/导入使用认证加密，用于工作站配置的安全批量部署。
 
-### Crypto Parameters
+### 加密参数
 
-| Parameter | Value |
-|-----------|-------|
+| 参数 | 值 |
+|------|-----|
 | KDF | Argon2id v19 |
-| Memory | 19,456 KiB |
-| Iterations | 2 |
-| Parallelism | 1 |
-| Cipher | AES-256-GCM |
-| Key | 32 bytes |
-| Salt | 16 bytes (random, `OsRng`) |
-| Nonce | 12 bytes (random, `OsRng`) |
-| Auth tag | 16 bytes |
-| Key material | Zeroized after use |
+| 内存 | 19,456 KiB |
+| 迭代次数 | 2 |
+| 并行度 | 1 |
+| 加密算法 | AES-256-GCM |
+| 密钥 | 32 字节 |
+| 盐值 | 16 字节（随机，`OsRng`） |
+| Nonce | 12 字节（随机，`OsRng`） |
+| 认证标签 | 16 字节 |
+| 密钥材料 | 使用后清零 |
 
-### Encrypted Envelope Format
+### 加密信封格式
 
 ```json
 {
@@ -79,59 +79,59 @@ Config export/import uses authenticated encryption for secure batch deployment o
 }
 ```
 
-### Export Flow
+### 导出流程
 
-1. Select config sections to include (port, origins, remote settings, etc.) — each is a boolean toggle (`ExportConfigOptions`)
-2. Build `ConfigTransferPayload` with only selected fields
-3. Generate random salt + nonce, derive key via Argon2id
-4. Encrypt JSON payload with AES-256-GCM
-5. Write envelope to file (default name: `printbridge-config.json`)
-6. Compute SHA-256 hash of file content for import confirmation
+1. 选择要包含的配置段（端口、Origin、远程设置等）——每个都是布尔开关（`ExportConfigOptions`）
+2. 构建仅包含所选字段的 `ConfigTransferPayload`
+3. 生成随机盐值 + nonce，通过 Argon2id 派生密钥
+4. 使用 AES-256-GCM 加密 JSON 负载
+5. 将信封写入文件（默认文件名：`printbridge-config.json`）
+6. 计算文件内容的 SHA-256 哈希，用于导入确认
 
-The password can be empty — an empty password still goes through the full encryption pipeline. If the Authorization Token is included with an empty password, the UI requires confirmation.
+密码可以为空——空密码仍然经过完整的加密流程。如果 Authorization Token 被包含在内且密码为空，UI 会要求确认。
 
-### Import Flow
+### 导入流程
 
-1. Read encrypted file + compute SHA-256 hash (for user confirmation)
-2. Decrypt with password
-3. **Preview** — show a diff of current → new values for each field (`ImportPreview`)
-4. On user confirmation → **field-by-field merge** into current config
-5. Only fields present in the file are overwritten; absent fields retain current values
-6. Save `normalized()` config
+1. 读取加密文件 + 计算 SHA-256 哈希（用于用户确认）
+2. 用密码解密
+3. **预览**——显示每个字段的当前值 → 新值 diff（`ImportPreview`）
+4. 用户确认后 → **逐字段合并**到当前配置
+5. 仅文件中存在的字段被覆盖；不存在的字段保留当前值
+6. 保存 `normalized()` 配置
 
-**Bearer token protection:** If the import file's token field is missing, `null`, or empty string → the current token is preserved. Only a non-empty string overwrites.
+**Bearer token 保护：** 如果导入文件的 token 字段缺失、为 `null` 或空字符串 → 保留当前 token。仅非空字符串才会覆盖。
 
-### Cross-Language Generation
+### 跨语言生成
 
-ERP or deployment systems can generate importable config files without PrintBridge. Reference implementations in `examples/config-transfer/` implement the same crypto format:
+ERP 或部署系统可以在不使用 PrintBridge 的情况下生成可导入的配置文件。`examples/config-transfer/` 中的参考实现了相同的加密格式：
 
-| Language | Library |
-|----------|---------|
+| 语言 | 库 |
+|------|-----|
 | Node.js | `libsodium-wrappers-sumo` + Node `crypto` |
 | PHP | `sodium_crypto_pwhash` + `openssl_encrypt` |
 | Go | `golang.org/x/crypto/argon2` + `crypto/aes` |
 
-All share identical constants and a cross-verified test vector. Verify with:
+所有实现共享相同的常量和交叉验证的测试向量。使用以下命令验证：
 
 ```bash
 pnpm verify:config-transfer-examples
 ```
 
-## Trust Boundaries and Best Practices
+## 信任边界与最佳实践
 
-- Add **only trusted business systems** to the Origin allowlist
-- Add **only trusted client IPs/CIDR ranges** to the IP allowlist
-- Even when the service listens on LAN, **do not expose the port to untrusted networks**
-- Control who can create print tasks and which files can be printed **on the business system side**
-- **Do not** expose sensitive file URLs to untrusted pages — the Origin check does not validate file URL domains
-- The `service.host` field is cosmetic — always treat the service as listening on all interfaces
+- 仅向 Origin 白名单添加**受信任的业务系统**
+- 仅向 IP 白名单添加**受信任的客户端 IP/CIDR 范围**
+- 即使服务监听在局域网上，也**不要**将端口暴露给不受信任的网络
+- 在**业务系统端**控制谁可以创建打印任务以及哪些文件可以被打印
+- **不要**将敏感文件 URL 暴露给不受信任的页面——Origin 检查不校验文件 URL 域名
+- `service.host` 字段是装饰性的——始终将服务视为监听所有接口
 
-## Source References
+## 源码参考
 
-| Area | File |
+| 领域 | 文件 |
 |------|------|
-| IP whitelist logic | `crates/core/src/ip_whitelist.rs` |
-| Config encryption/decryption | `crates/cli/src/config_transfer.rs` |
-| WebSocket middleware (IP check) | `crates/runtime/src/server.rs` (`ip_whitelist_middleware`) |
-| WebSocket Origin validation | `crates/runtime/src/server.rs` (`ws_handler`) |
-| Config normalization (forced 127.0.0.1, IP normalization) | `crates/core/src/config.rs` |
+| IP 白名单逻辑 | `crates/core/src/ip_whitelist.rs` |
+| 配置加密/解密 | `crates/cli/src/config_transfer.rs` |
+| WebSocket 中间件（IP 检查） | `crates/runtime/src/server.rs`（`ip_whitelist_middleware`） |
+| WebSocket Origin 校验 | `crates/runtime/src/server.rs`（`ws_handler`） |
+| 配置归一化（强制 127.0.0.1、IP 归一化） | `crates/core/src/config.rs` |

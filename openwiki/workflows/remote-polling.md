@@ -1,37 +1,37 @@
-# Remote Task Polling
+# 远程任务轮询
 
-Remote task polling lets PrintBridge operate as an unattended agent on workstations, store terminals, or warehouse computers. Instead of a browser pushing jobs via WebSocket, a business server maintains pending print tasks. The local agent periodically polls for tasks, submits them to the OS print queue, and reports execution status back to the server.
+远程任务轮询让 PrintBridge 可以作为工作站、门店终端或仓库电脑上的无人值守代理运行。业务服务器维护待打印任务，本地代理周期性地轮询获取任务、提交到操作系统打印队列，并将执行状态报告回服务器。
 
-This is suited for scenarios where the system creates tasks and expects a specific terminal to print automatically — production labels, shipping labels, picking lists, receipts.
+适用于系统创建任务并期望特定终端自动打印的场景——生产标签、物流标签、拣货单、收据等。
 
-## Polling Protocol
+## 轮询协议
 
-The agent uses the same `remote.endpoint_url` for both operations:
-
-```
-GET  {endpoint_url}   → fetch pending tasks
-POST {endpoint_url}   → report task status
-```
-
-### Authentication Headers
+代理对两个操作使用同一个 `remote.endpoint_url`：
 
 ```
-Authorization: Bearer <bearer_token>        (if configured)
-X-PrintBridge-Device-Id: <device_id>        (if configured)
-X-PrintBridge-Device-Name: <device_name>    (if configured)
+GET  {endpoint_url}   → 获取待处理任务
+POST {endpoint_url}   → 报告任务状态
 ```
 
-All three fields are optional and independent — only the configured ones are sent.
+### 认证头
 
-### Task Fetch Response
+```
+Authorization: Bearer <bearer_token>        （如已配置）
+X-PrintBridge-Device-Id: <device_id>        （如已配置）
+X-PrintBridge-Device-Name: <device_name>    （如已配置）
+```
 
-The `GET` response is flexible:
-- `204 No Content` or empty body → no tasks
-- `null` → no tasks
-- Single task object → one task
-- Array of task objects → multiple tasks
+三个字段均为可选且独立——仅发送已配置的字段。
 
-Tasks use the same field structure as WebSocket jobs:
+### 任务获取响应
+
+`GET` 响应是灵活的：
+- `204 No Content` 或空响应体 → 无任务
+- `null` → 无任务
+- 单个任务对象 → 一个任务
+- 任务对象数组 → 多个任务
+
+任务使用与 WebSocket 作业相同的字段结构：
 
 ```json
 {
@@ -44,9 +44,9 @@ Tasks use the same field structure as WebSocket jobs:
 }
 ```
 
-Batch tasks carry `batch_id` and a `jobs` array. `job_id` is the dedup key — tasks with already-seen `job_id` values are silently skipped.
+批量任务携带 `batch_id` 和 `jobs` 数组。`job_id` 是去重键——已见过的 `job_id` 的任务会被静默跳过。
 
-### Status Report Body
+### 状态报告请求体
 
 ```json
 {
@@ -62,99 +62,99 @@ Batch tasks carry `batch_id` and a `jobs` array. `job_id` is the dedup key — t
 }
 ```
 
-`event_id` is a UUID v4 generated locally and persisted in SQLite — the server can use it as an idempotency key.
+`event_id` 是本地生成的 UUID v4 并持久化到 SQLite——服务器可将其用作幂等键。
 
-## Status Mapping
+## 状态映射
 
-PrintBridge reports only three remote statuses:
+PrintBridge 仅报告三种远程状态：
 
-| Local Queue Status | Remote Status Reported |
-|-------------------|----------------------|
+| 本地队列状态 | 报告的远程状态 |
+|------------|--------------|
 | `queued` | `accepted` |
 | `submitted` | `success` |
 | `failed` | `failed` |
 | `cancelled` | `failed` |
 
-`downloading`, `printing`, `completed`, and `unknown` are **not** reported to the remote server — they remain in local logs and task history only.
+`downloading`、`printing`、`completed` 和 `unknown` **不会**报告给远程服务器——它们仅保留在本地日志和任务历史中。
 
-## Worker Loop (`remote_worker.rs`)
+## Worker 循环（`remote_worker.rs`）
 
-The remote worker runs an infinite loop:
+远程 worker 运行无限循环：
 
-1. Read config; if `remote.enabled` is false → `await` on `remote_notify` (wakes on config change)
-2. **Poll:** `fetch_tasks` → validate → dedup → enqueue to print queue
-3. **Report:** deliver pending status events from the SQLite outbox
-4. If a configuration error (HTTP 401/403/404) occurred → `await` on `remote_notify` (stops hammering the server)
-5. Sleep for `poll_interval_seconds` (default 10, minimum 3)
-6. Repeat
+1. 读取配置；如果 `remote.enabled` 为 false → `await` `remote_notify`（配置变更时唤醒）
+2. **轮询：** `fetch_tasks` → 校验 → 去重 → 入队到打印队列
+3. **报告：** 从 SQLite outbox 投递待发送的状态事件
+4. 如果发生配置错误（HTTP 401/403/404）→ `await` `remote_notify`（停止轰炸服务器）
+5. 休眠 `poll_interval_seconds`（默认 10，最小 3）
+6. 重复
 
-## SQLite Persistence (`remote_store.rs`)
+## SQLite 持久化（`remote_store.rs`）
 
-Remote state is persisted in `remote.sqlite3` with two tables:
+远程状态持久化在 `remote.sqlite3` 中，包含两个表：
 
-### `remote_jobs` — Dedup Table
+### `remote_jobs`——去重表
 
-| Column | Purpose |
-|--------|---------|
-| `job_id` (PK) | Dedup key |
-| `request_id`, `batch_id` | Original request tracking |
-| `status` | Current status |
-| `first_seen_at`, `updated_at` | Timestamps |
-
-`record_job_if_new` uses `INSERT OR IGNORE` — returns `true` only on first insert. This provides cross-restart dedup: if the agent restarts, tasks already in the queue are not re-enqueued.
-
-### `remote_status_events` — Status Outbox
-
-| Column | Purpose |
-|--------|---------|
-| `event_id` (PK) | UUID v4, idempotency key |
-| `job_id`, `status`, `message` | Status to report |
-| `delivery_state` | `pending` / `delivered` / `abandoned` |
-| `retry_count` | Incremented on failure |
-| `next_retry_at` | Exponential backoff timestamp |
-| `last_error` | Last failure message |
-
-Unique index on `(job_id, status)` prevents duplicate status reports per job.
-
-### Delivery with Exponential Backoff
-
-`report_pending_once` fetches up to 20 pending events and POSTs each:
-- **Success** (HTTP 2xx) → `mark_delivered`
-- **Failure** (non-2xx or network error) → `mark_delivery_failed` → increments `retry_count`, sets `next_retry_at` with exponential backoff, abandons after `max_report_retries` (default 10)
-- **Configuration error** (401/403/404) → propagates immediately, pauses polling and reporting until config is fixed
-
-## Connection Test
-
-The settings UI's "Test Connection" button and remote config save trigger a test via `remote_client::test_connection`:
-1. Sends `GET` to the endpoint with `X-PrintBridge-Test: true` header
-2. Sends `POST` with the same test header
-3. Server should respond `204 No Content` for test requests
-
-## Configuration Error Handling
-
-HTTP 401, 403, and 404 are treated as **configuration errors** — not transient failures. When encountered, the remote worker pauses both polling and status reporting, and waits on `remote_notify` (triggered when the user updates remote config). This prevents hammering a misconfigured or unauthorized endpoint.
-
-## Server Implementation Examples
-
-Reference implementations in `examples/remote-task/` demonstrate the server-side HTTP API:
-
-| Language | File | Example Task |
-|----------|------|-------------|
-| Node.js | `remote-task-server.mjs` | Single PDF (`JOB-NODE-PDF`) |
-| PHP | `remote-task-server.php` | Single image (`JOB-PHP-IMAGE`) |
-| Go | `remote-task-server.go` | Batch with PDF + image (`BATCH-GO-SAMPLE`) |
-
-All three:
-- Listen on `127.0.0.1:18080`
-- Use Bearer token `dev-token`
-- Return `204` for `X-PrintBridge-Test: true` requests
-- `GET` → return task JSON; `POST` → log status, return `204`
-
-## Source References
-
-| Area | File |
+| 列 | 用途 |
 |------|------|
-| HTTP client (fetch + report + test) | `crates/runtime/src/remote_client.rs` |
-| Task/batch protocol structures | `crates/core/src/remote_protocol.rs` |
-| SQLite store (dedup + outbox) | `crates/runtime/src/remote_store.rs` |
-| Worker loop (poll + report + backoff) | `crates/runtime/src/remote_worker.rs` |
+| `job_id`（主键） | 去重键 |
+| `request_id`、`batch_id` | 原始请求跟踪 |
+| `status` | 当前状态 |
+| `first_seen_at`、`updated_at` | 时间戳 |
+
+`record_job_if_new` 使用 `INSERT OR IGNORE`——仅在首次插入时返回 `true`。这提供了跨重启的去重：如果代理重启，已在队列中的任务不会被重新入队。
+
+### `remote_status_events`——状态 Outbox
+
+| 列 | 用途 |
+|------|------|
+| `event_id`（主键） | UUID v4，幂等键 |
+| `job_id`、`status`、`message` | 要报告的状态 |
+| `delivery_state` | `pending` / `delivered` / `abandoned` |
+| `retry_count` | 失败时递增 |
+| `next_retry_at` | 指数退避时间戳 |
+| `last_error` | 最近一次失败的错误信息 |
+
+`(job_id, status)` 上的唯一索引防止每个作业的重复状态报告。
+
+### 带指数退避的投递
+
+`report_pending_once` 获取最多 20 条待处理事件并逐条 POST：
+- **成功**（HTTP 2xx）→ `mark_delivered`
+- **失败**（非 2xx 或网络错误）→ `mark_delivery_failed` → 递增 `retry_count`，设置带指数退避的 `next_retry_at`，超过 `max_report_retries`（默认 10）后放弃
+- **配置错误**（401/403/404）→ 立即传播，暂停轮询和报告直到配置修复
+
+## 连接测试
+
+设置界面的"测试连接"按钮和远程配置保存通过 `remote_client::test_connection` 触发测试：
+1. 带 `X-PrintBridge-Test: true` 头向端点发送 `GET`
+2. 带相同测试头发送 `POST`
+3. 服务器应对测试请求返回 `204 No Content`
+
+## 配置错误处理
+
+HTTP 401、403 和 404 被视为**配置错误**——而非临时故障。遇到时，远程 worker 会同时暂停轮询和状态报告，并等待 `remote_notify`（在用户更新远程配置时触发）。这可防止反复轰炸配置错误或未授权的端点。
+
+## 服务器实现示例
+
+`examples/remote-task/` 中的参考实现演示了服务端 HTTP API：
+
+| 语言 | 文件 | 示例任务 |
+|------|------|---------|
+| Node.js | `remote-task-server.mjs` | 单个 PDF（`JOB-NODE-PDF`） |
+| PHP | `remote-task-server.php` | 单个图片（`JOB-PHP-IMAGE`） |
+| Go | `remote-task-server.go` | PDF + 图片批量（`BATCH-GO-SAMPLE`） |
+
+三者均：
+- 监听 `127.0.0.1:18080`
+- 使用 Bearer token `dev-token`
+- 对 `X-PrintBridge-Test: true` 请求返回 `204`
+- `GET` → 返回任务 JSON；`POST` → 记录状态，返回 `204`
+
+## 源码参考
+
+| 领域 | 文件 |
+|------|------|
+| HTTP client（获取 + 报告 + 测试） | `crates/runtime/src/remote_client.rs` |
+| 任务/批量协议结构 | `crates/core/src/remote_protocol.rs` |
+| SQLite 存储（去重 + outbox） | `crates/runtime/src/remote_store.rs` |
+| Worker 循环（轮询 + 报告 + 退避） | `crates/runtime/src/remote_worker.rs` |

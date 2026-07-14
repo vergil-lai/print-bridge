@@ -1,46 +1,46 @@
-# Print Protocol & API
+# 打印协议与 API
 
-PrintBridge exposes a WebSocket endpoint for real-time browser-initiated printing. Config, logs, printer discovery, and diagnostics are handled via Tauri commands (desktop) or CLI/local IPC (headless) — there is no HTTP REST API.
+PrintBridge 暴露一个 WebSocket 端点用于浏览器发起的实时打印。配置、日志、打印机发现和诊断通过 Tauri 命令（桌面）或 CLI/本地 IPC（headless）处理——没有 HTTP REST API。
 
-The WebSocket protocol is served by an Axum server on `0.0.0.0:{port}` (default `17890`). The router exposes only `/ws`; no other HTTP routes are available.
+WebSocket 协议由 Axum 服务器在 `0.0.0.0:{port}`（默认 `17890`）上提供。路由仅暴露 `/ws`；没有其他 HTTP 路由可用。
 
 ## WebSocket API
 
-### Connection
+### 连接
 
 ```
 ws://127.0.0.1:17890/ws
 ```
 
-During the WebSocket handshake, the server validates the `Origin` header against `config.security.allowed_origins`. If the Origin is not in the allowlist, the upgrade is rejected. The connecting client IP must also pass the IP whitelist check (applied as middleware to all routes including `/ws`).
+在 WebSocket 握手期间，服务器根据 `config.security.allowed_origins` 校验 `Origin` 头。如果 Origin 不在白名单中，升级请求将被拒绝。连接的客户端 IP 也必须通过 IP 白名单检查（作为中间件应用于包括 `/ws` 在内的所有路由）。
 
-### Client → Server Messages
+### 客户端 → 服务器消息
 
-All messages are JSON with a `type` discriminator field (`#[serde(tag = "type")]`).
+所有消息均为 JSON，带有 `type` 区分字段（`#[serde(tag = "type")]`）。
 
-| Message Type | Fields | Purpose |
-|-------------|--------|---------|
-| `ping` | `time` | Heartbeat; server responds with `pong` |
-| `get_printers_list` | — | Request list of available printers |
-| `get_printer_info` | `printer_name` | Request details for a specific printer |
-| `get_print_queue` | — | Request current print queue status |
-| `print` | `request_id`, `job` (format, `file_url`/`data_base64`/`html`, `printer_name?`, `copies?`, `paper?`, `wait_ms?`) | Submit a single print job |
-| `print_batch` | `request_id`, `batch_id`, `jobs[]` | Submit multiple jobs atomically |
+| 消息类型 | 字段 | 用途 |
+|---------|------|------|
+| `ping` | `time` | 心跳；服务器回复 `pong` |
+| `get_printers_list` | — | 请求可用打印机列表 |
+| `get_printer_info` | `printer_name` | 请求特定打印机的详情 |
+| `get_print_queue` | — | 请求当前打印队列状态 |
+| `print` | `request_id`、`job`（format、`file_url`/`data_base64`/`html`、`printer_name?`、`copies?`、`paper?`、`wait_ms?`） | 提交单个打印作业 |
+| `print_batch` | `request_id`、`batch_id`、`jobs[]` | 原子化提交多个作业 |
 
-### Server → Client Messages
+### 服务器 → 客户端消息
 
-| Message Type | Purpose |
-|-------------|---------|
-| `pong` | Heartbeat response with `time` |
-| `printers_list` | Response to `get_printers_list` |
-| `printer_info` | Response to `get_printer_info` |
-| `print_queue` | Response to `get_print_queue` |
-| `job_status` | Status update for a job (pushed asynchronously) |
-| `error` | Error response with `code` and `message` |
+| 消息类型 | 用途 |
+|---------|------|
+| `pong` | 心跳响应，附带 `time` |
+| `printers_list` | 对 `get_printers_list` 的响应 |
+| `printer_info` | 对 `get_printer_info` 的响应 |
+| `print_queue` | 对 `get_print_queue` 的响应 |
+| `job_status` | 作业状态更新（异步推送） |
+| `error` | 错误响应，附带 `code` 和 `message` |
 
-### Job Lifecycle
+### 作业生命周期
 
-Each WebSocket connection only receives `job_status` events for jobs it submitted (tracked via per-connection `accepted_job_ids: HashSet`).
+每个 WebSocket 连接只接收其提交作业的 `job_status` 事件（通过每连接 `accepted_job_ids: HashSet` 跟踪）。
 
 ```
 Queued → Downloading → Printing → Submitted → Completed
@@ -49,18 +49,18 @@ Queued → Downloading → Printing → Submitted → Completed
                                           ↘ Cancelled
 ```
 
-| Status | Meaning |
-|--------|---------|
-| `queued` | Job accepted into the serial queue |
-| `downloading` | Downloading file from `file_url` |
-| `printing` | Converting (if needed) and submitting to OS print queue |
-| `submitted` | Job accepted by OS print queue (terminal for status reporting) |
-| `completed` | OS reports job completed (CUPS only; Windows cannot track) |
-| `failed` | Job failed at any stage |
-| `unknown` | OS cannot determine final status |
-| `cancelled` | Job cancelled |
+| 状态 | 含义 |
+|------|------|
+| `queued` | 作业已进入串行队列 |
+| `downloading` | 正在从 `file_url` 下载文件 |
+| `printing` | 正在转换（如需要）并提交到操作系统打印队列 |
+| `submitted` | 作业已被操作系统打印队列接受（状态报告的终态） |
+| `completed` | 操作系统报告作业已完成（仅 CUPS；Windows 无法跟踪） |
+| `failed` | 作业在任何阶段失败 |
+| `unknown` | 操作系统无法确定最终状态 |
+| `cancelled` | 作业已取消 |
 
-### Single Print Job Example
+### 单个打印作业示例
 
 ```json
 {
@@ -75,11 +75,11 @@ Queued → Downloading → Printing → Submitted → Completed
 }
 ```
 
-- `printer_name` optional — falls back to default printer
-- `paper` optional — falls back to default paper
-- `copies` optional — defaults to 1; must be ≤ `limits.max_copies`
+- `printer_name` 可选——回退到默认打印机
+- `paper` 可选——回退到默认纸张
+- `copies` 可选——默认 1；必须 ≤ `limits.max_copies`
 
-### Raw Print Job Example
+### Raw 打印作业示例
 
 ```json
 {
@@ -92,9 +92,9 @@ Queued → Downloading → Printing → Submitted → Completed
 }
 ```
 
-Raw jobs **do not** support `file_url`, `paper`, or `copies`. The `data_base64` bytes are submitted to the OS print queue as-is. PrintBridge does not parse or generate device commands (ESC/POS, TSPL, ZPL, EPL, PCL, PostScript).
+Raw 作业**不**支持 `file_url`、`paper` 或 `copies`。`data_base64` 字节原样提交到操作系统打印队列。PrintBridge 不解析或生成设备命令（ESC/POS、TSPL、ZPL、EPL、PCL、PostScript）。
 
-### HTML Print Job Example
+### HTML 打印作业示例
 
 ```json
 {
@@ -107,11 +107,11 @@ Raw jobs **do not** support `file_url`, `paper`, or `copies`. The `data_base64` 
 }
 ```
 
-HTML jobs render the page in a headless Chrome/Chromium/Edge browser, export to PDF, then submit via the normal PDF print path. The `file_url` must be an absolute `http` or `https` URL. The `wait_ms` field (default 1000, max 30000) controls how long the renderer waits for the page to settle before PDF export.
+HTML 作业在 headless Chrome/Chromium/Edge 浏览器中渲染页面，导出为 PDF，然后通过常规 PDF 打印路径提交。`file_url` 必须是绝对 `http` 或 `https` URL。`wait_ms` 字段（默认 1000，最大 30000）控制渲染器在 PDF 导出前等待页面稳定的时间。
 
-All browser resource requests pass through a filtering proxy that blocks non-public network targets (loopback, private IPs, link-local, multicast). This prevents SSRF attacks from untrusted HTML pages.
+所有浏览器资源请求都经过过滤代理，该代理阻止非公共网络目标（回环、私有 IP、链路本地、多播）。这可防止不受信任的 HTML 页面发起 SSRF 攻击。
 
-### Raw HTML Print Job Example
+### Raw HTML 打印作业示例
 
 ```json
 {
@@ -124,9 +124,9 @@ All browser resource requests pass through a filtering proxy that blocks non-pub
 }
 ```
 
-`raw-html` jobs carry inline HTML instead of a URL. The same rendering pipeline (Chrome/Chromium via filtering proxy) applies. The inline HTML is loaded through the proxy as well, so any referenced resources (images, stylesheets) must be on public network targets.
+`raw-html` 作业携带内联 HTML 而非 URL。使用相同的渲染流水线（通过过滤代理的 Chrome/Chromium）。内联 HTML 也通过代理加载，因此任何引用的资源（图片、样式表）必须位于公共网络目标上。
 
-### Batch Print Job Example
+### 批量打印作业示例
 
 ```json
 {
@@ -140,9 +140,9 @@ All browser resource requests pass through a filtering proxy that blocks non-pub
 }
 ```
 
-Batch jobs can mix PDF, image, Office, HTML, raw-html, and raw formats. `batch_id` and all `job_id`s must be unique. Batch size is limited by `limits.max_batch_jobs` (default 20). Batch execution still uses the same serial queue — it is not concurrent printing.
+批量作业可混合 PDF、图片、Office、HTML、raw-html 和 raw 格式。`batch_id` 和所有 `job_id` 必须唯一。批量大小受 `limits.max_batch_jobs`（默认 20）限制。批量执行仍使用同一个串行队列——并非并发打印。
 
-### Job Status Push
+### 作业状态推送
 
 ```json
 {
@@ -154,50 +154,50 @@ Batch jobs can mix PDF, image, Office, HTML, raw-html, and raw formats. `batch_i
 }
 ```
 
-### Supported Formats
+### 支持的格式
 
-| Format | Input | Conversion |
-|--------|-------|------------|
-| `pdf` | `file_url` or `data:application/pdf;base64,...` | None |
-| `image` / `png` / `jpg` / `jpeg` | `file_url` | Image → PDF (fit-contain to paper size, 203 DPI) |
-| `docx` / `xlsx` / `pptx` | `file_url` (HTTP/HTTPS only) | Office → PDF via LibreOffice (macOS/Linux) or Windows COM |
-| `html` | `file_url` (absolute HTTP/HTTPS) | HTML → PDF via headless Chrome/Chromium with SSRF-protected proxy |
-| `raw-html` | `html` (inline string) | HTML → PDF via headless Chrome/Chromium with SSRF-protected proxy |
-| `raw` | `data_base64` | None — bytes submitted as-is |
+| 格式 | 输入 | 转换 |
+|------|------|------|
+| `pdf` | `file_url` 或 `data:application/pdf;base64,...` | 无 |
+| `image` / `png` / `jpg` / `jpeg` | `file_url` | 图片 → PDF（适应纸张尺寸，203 DPI） |
+| `docx` / `xlsx` / `pptx` | `file_url`（仅 HTTP/HTTPS） | Office → PDF，通过 LibreOffice（macOS/Linux）或 Windows COM |
+| `html` | `file_url`（绝对 HTTP/HTTPS） | HTML → PDF，通过 headless Chrome/Chromium（带 SSRF 防护代理） |
+| `raw-html` | `html`（内联字符串） | HTML → PDF，通过 headless Chrome/Chromium（带 SSRF 防护代理） |
+| `raw` | `data_base64` | 无——字节原样提交 |
 
-Office tasks only support HTTP(S) `file_url`, not data URLs. HTML tasks support an optional `wait_ms` field (0–30000ms, default 1000ms) that controls render wait time.
+Office 任务仅支持 HTTP(S) `file_url`，不支持 data URL。HTML 任务支持可选的 `wait_ms` 字段（0–30000ms，默认 1000ms），控制渲染等待时间。
 
-### Error Codes
+### 错误码
 
-| Code | Meaning |
-|------|---------|
-| `ORIGIN_NOT_ALLOWED` | WebSocket Origin not in allowlist |
-| `INVALID_MESSAGE` | Malformed message |
-| `PRINTER_NOT_CONFIGURED` | No default printer set and none specified |
-| `PRINTER_NOT_FOUND` | Specified printer does not exist |
-| `PAPER_NOT_CONFIGURED` | No default paper set and none specified |
-| `PAPER_NOT_FOUND` | Paper size not available for printer |
-| `DOWNLOAD_FAILED` | File download failed |
-| `FILE_TOO_LARGE` | File exceeds size limit |
-| `UNSUPPORTED_FORMAT` | Format not supported |
-| `FORMAT_MISMATCH` | Declared format doesn't match file content |
-| `OFFICE_CONVERT_FAILED` | Office → PDF conversion failed |
-| `PRINT_FAILED` | Print submission to OS failed |
-| `JOB_DUPLICATED` | `job_id` already seen |
-| `BATCH_DUPLICATED` | `batch_id` already seen |
-| `BATCH_TOO_LARGE` | Batch exceeds max jobs limit |
-| `COPIES_OUT_OF_RANGE` | Copies exceeds max copies |
-| `SERVICE_PORT_IN_USE` | Port already occupied |
-| `INTERNAL_ERROR` | Unexpected internal error |
+| 错误码 | 含义 |
+|--------|------|
+| `ORIGIN_NOT_ALLOWED` | WebSocket Origin 不在白名单中 |
+| `INVALID_MESSAGE` | 消息格式错误 |
+| `PRINTER_NOT_CONFIGURED` | 未设置默认打印机且未指定 |
+| `PRINTER_NOT_FOUND` | 指定的打印机不存在 |
+| `PAPER_NOT_CONFIGURED` | 未设置默认纸张且未指定 |
+| `PAPER_NOT_FOUND` | 该打印机不支持此纸张尺寸 |
+| `DOWNLOAD_FAILED` | 文件下载失败 |
+| `FILE_TOO_LARGE` | 文件超过大小限制 |
+| `UNSUPPORTED_FORMAT` | 不支持的格式 |
+| `FORMAT_MISMATCH` | 声明的格式与文件内容不匹配 |
+| `OFFICE_CONVERT_FAILED` | Office → PDF 转换失败 |
+| `PRINT_FAILED` | 提交到操作系统打印失败 |
+| `JOB_DUPLICATED` | `job_id` 已存在 |
+| `BATCH_DUPLICATED` | `batch_id` 已存在 |
+| `BATCH_TOO_LARGE` | 批量超过最大作业数限制 |
+| `COPIES_OUT_OF_RANGE` | 份数超过最大限制 |
+| `SERVICE_PORT_IN_USE` | 端口已被占用 |
+| `INTERNAL_ERROR` | 未预期的内部错误 |
 
-## Source References
+## 源码参考
 
-| Area | File |
+| 领域 | 文件 |
 |------|------|
-| WS handler + IP middleware | `crates/runtime/src/server.rs` |
-| Message types + validation + error codes | `crates/core/src/protocol.rs` |
-| Per-connection status filtering | `crates/runtime/src/server.rs` |
-| Batch acceptance + dedup | `crates/runtime/src/queue.rs` |
-| HTML rendering | `crates/runtime/src/html/` |
+| WS 处理器 + IP 中间件 | `crates/runtime/src/server.rs` |
+| 消息类型 + 校验 + 错误码 | `crates/core/src/protocol.rs` |
+| 每连接状态过滤 | `crates/runtime/src/server.rs` |
+| 批量接受 + 去重 | `crates/runtime/src/queue.rs` |
+| HTML 渲染 | `crates/runtime/src/html/` |
 
-Detailed protocol examples are in `docs/printbridge-technical.md` (WebSocket API section). Browser integration should use the [print-bridge-sdk](https://github.com/vergil-lai/print-bridge-jssdk) which wraps this protocol.
+详细协议示例见 `docs/printbridge-technical.md`（WebSocket API 章节）。浏览器集成应使用 [print-bridge-sdk](https://github.com/vergil-lai/print-bridge-jssdk)，它封装了此协议。

@@ -1,229 +1,229 @@
-# Source Map
+# 源码地图
 
-A developer's guide to the PrintBridge codebase: file responsibilities, what to watch out for when modifying each area, and key design decisions.
+开发者代码库指南：文件职责、修改各区域时的注意事项，以及关键设计决策。
 
-## Project Layout
+## 项目结构
 
 ```
-PrintBridge/                       # Cargo workspace (5 members)
+PrintBridge/                       # Cargo workspace（5 个成员）
 ├── crates/
-│   ├── core/                      # Domain models, protocol, config — framework-free
+│   ├── core/                      # 领域模型、协议、配置——无框架依赖
 │   │   └── src/
-│   │       ├── config.rs          # AgentConfig + sections, load/save, defaults
-│   │       ├── protocol.rs        # ClientMessage/ServerMessage, validation, ErrorCode
-│   │       ├── ip_whitelist.rs    # IP/CIDR validation + runtime checks
-│   │       ├── printing.rs        # PrintBackend trait, PrinterInfo/PaperInfo types
-│   │       ├── queue.rs           # QueueState types, QueueError
-│   │       ├── remote_protocol.rs # RemoteTask types + parser
-│   │       └── activity.rs        # TaskHistoryJob, TaskHistoryEvent, TaskLogEntry
-│   ├── runtime/                   # AgentRuntime, platform adapters, background tasks
+│   │       ├── config.rs          # AgentConfig + 各配置段，加载/保存，默认值
+│   │       ├── protocol.rs        # ClientMessage/ServerMessage，校验，ErrorCode
+│   │       ├── ip_whitelist.rs    # IP/CIDR 校验 + 运行时检查
+│   │       ├── printing.rs        # PrintBackend trait，PrinterInfo/PaperInfo 类型
+│   │       ├── queue.rs           # QueueState 类型，QueueError
+│   │       ├── remote_protocol.rs # RemoteTask 类型 + 解析器
+│   │       └── activity.rs        # TaskHistoryJob，TaskHistoryEvent，TaskLogEntry
+│   ├── runtime/                   # AgentRuntime，平台适配器，后台任务
 │   │   └── src/
-│   │       ├── agent.rs           # AgentRuntime + AgentHandle lifecycle
-│   │       ├── builder.rs         # RuntimeBuilder (paths + adapters → AgentRuntime)
-│   │       ├── state.rs           # AgentState (shared config, queue, stores, adapters)
-│   │       ├── server.rs          # Axum router (only /ws exposed)
-│   │       ├── queue.rs           # Serial print queue + job processing pipeline
-│   │       ├── command_executor.rs # RuntimeCommandExecutor (offline Command executor)
-│   │       ├── doctor.rs          # Doctor diagnostic checks
-│   │       ├── html/              # HTML → PDF rendering (Chrome/Chromium via CDP)
-│   │       ├── printing/          # Platform print backends (CUPS, Windows)
-│   │       ├── office/            # Office → PDF conversion (LibreOffice / Windows COM)
-│   │       ├── document.rs        # Magic byte detection, image→PDF
-│   │       ├── download.rs        # HTTP/HTTPS/data URL download to temp
-│   │       ├── ipc/               # Local IPC (Unix socket / Windows named pipe)
-│   │       ├── remote_*.rs        # Remote task polling subsystem
-│   │       ├── task_history.rs    # SQLite task history store
-│   │       ├── logs.rs            # In-memory log ring buffer
-│   │       ├── test_print.rs      # Calibration test page
-│   │       └── agent_guard.rs     # Instance exclusivity (port probe)
-│   └── cli/                       # Command enum, CommandService, CLI parser, IPC client
+│   │       ├── agent.rs           # AgentRuntime + AgentHandle 生命周期
+│   │       ├── builder.rs         # RuntimeBuilder（路径 + 适配器 → AgentRuntime）
+│   │       ├── state.rs           # AgentState（共享配置、队列、stores、适配器）
+│   │       ├── server.rs          # Axum 路由（仅暴露 /ws）
+│   │       ├── queue.rs           # 串行打印队列 + 作业处理流水线
+│   │       ├── command_executor.rs # RuntimeCommandExecutor（离线 Command 执行器）
+│   │       ├── doctor.rs          # Doctor 诊断检查
+│   │       ├── html/              # HTML → PDF 渲染（通过 CDP 调用 Chrome/Chromium）
+│   │       ├── printing/          # 平台打印后端（CUPS、Windows）
+│   │       ├── office/            # Office → PDF 转换（LibreOffice / Windows COM）
+│   │       ├── document.rs        # Magic byte 检测，图片→PDF
+│   │       ├── download.rs        # HTTP/HTTPS/data URL 下载到临时文件
+│   │       ├── ipc/               # 本地 IPC（Unix socket / Windows 命名管道）
+│   │       ├── remote_*.rs        # 远程任务轮询子系统
+│   │       ├── task_history.rs    # SQLite 任务历史存储
+│   │       ├── logs.rs            # 内存日志环形缓冲区
+│   │       ├── test_print.rs      # 校准测试页
+│   │       └── agent_guard.rs     # 实例独占（端口探测）
+│   └── cli/                       # Command 枚举，CommandService，CLI 解析器，IPC client
 │       └── src/
-│           ├── command.rs         # Command enum + policy (online/offline preference)
-│           ├── service.rs         # CommandService (online/offline dispatch)
-│           ├── parser.rs          # Clap command structure + CLI handlers
-│           ├── client.rs          # LocalClientExecutor (IPC client)
-│           ├── output.rs          # CommandResult, CommandError, DoctorReport types
-│           ├── policy.rs          # CommandPolicy enum
-│           ├── product.rs         # ProductCommandAdapter (autostart, language)
-│           ├── interaction.rs     # Terminal prompts
-│           └── config_transfer.rs # Encrypted config import/export
+│           ├── command.rs         # Command 枚举 + 策略（在线/离线偏好）
+│           ├── service.rs         # CommandService（在线/离线分发）
+│           ├── parser.rs          # Clap 命令结构 + CLI 处理器
+│           ├── client.rs          # LocalClientExecutor（IPC client）
+│           ├── output.rs          # CommandResult，CommandError，DoctorReport 类型
+│           ├── policy.rs          # CommandPolicy 枚举
+│           ├── product.rs         # ProductCommandAdapter（自启动、语言）
+│           ├── interaction.rs     # 终端交互提示
+│           └── config_transfer.rs # 加密配置导入/导出
 ├── apps/
-│   ├── desktop/                   # Vue 3 frontend + Tauri backend
-│   │   ├── src/                   # Frontend (Vue 3 + TypeScript)
-│   │   │   ├── App.vue            # Monolithic settings UI
-│   │   │   ├── api.ts             # Tauri invoke + HTTP wrappers
-│   │   │   ├── types.ts           # Shared TypeScript types
-│   │   │   ├── i18n.ts            # vue-i18n (zh-CN, en)
-│   │   │   └── updater.ts         # Tauri updater wrapper
-│   │   └── src-tauri/             # Desktop Rust backend
+│   ├── desktop/                   # Vue 3 前端 + Tauri 后端
+│   │   ├── src/                   # 前端（Vue 3 + TypeScript）
+│   │   │   ├── App.vue            # 单体设置界面
+│   │   │   ├── api.ts             # Tauri invoke + HTTP 封装
+│   │   │   ├── types.ts           # 共享 TypeScript 类型
+│   │   │   ├── i18n.ts            # vue-i18n（zh-CN、en）
+│   │   │   └── updater.ts         # Tauri 更新器封装
+│   │   └── src-tauri/             # 桌面 Rust 后端
 │   │       ├── src/
-│   │       │   ├── main.rs        # Binary entry
-│   │       │   ├── lib.rs         # Tauri app setup + runtime wiring
-│   │       │   ├── cli.rs         # Desktop CLI dispatch
-│   │       │   ├── product_cli.rs # Desktop product adapter (autostart, language)
-│   │       │   ├── commands.rs    # Tauri commands (config, logs, test print)
-│   │       │   └── tray.rs        # System tray
-│   │       ├── resources/         # SumatraPDF.exe (Windows)
-│   │       └── tests/             # Integration tests
-│   └── server/                    # Linux headless binary
+│   │       │   ├── main.rs        # 二进制入口
+│   │       │   ├── lib.rs         # Tauri 应用初始化 + runtime 装配
+│   │       │   ├── cli.rs         # 桌面 CLI 分发
+│   │       │   ├── product_cli.rs # 桌面产品适配器（自启动、语言）
+│   │       │   ├── commands.rs    # Tauri 命令（配置、日志、测试打印）
+│   │       │   └── tray.rs        # 系统托盘
+│   │       ├── resources/         # SumatraPDF.exe（Windows）
+│   │       └── tests/             # 集成测试
+│   └── server/                    # Linux headless 二进制
 │       ├── src/
-│       │   ├── main.rs            # Binary entry: serve / shared CLI dispatch
-│       │   ├── dependencies.rs    # Preflight checks (CUPS, LibreOffice, Chrome)
-│       │   ├── parser.rs          # Server CLI args
-│       │   ├── paths.rs           # System paths (/etc, /var/lib, /run)
-│       │   ├── readiness.rs       # systemd READY/STOPPING notifications
-│       │   └── signals.rs         # SIGTERM/SIGINT handling
-│       ├── packaging/             # deb/rpm/systemd unit files
+│       │   ├── main.rs            # 二进制入口：serve / 共享 CLI 分发
+│       │   ├── dependencies.rs    # 预检（CUPS、LibreOffice、Chrome）
+│       │   ├── parser.rs          # 服务器 CLI 参数
+│       │   ├── paths.rs           # 系统路径（/etc、/var/lib、/run）
+│       │   ├── readiness.rs       # systemd READY/STOPPING 通知
+│       │   └── signals.rs         # SIGTERM/SIGINT 处理
+│       ├── packaging/             # deb/rpm/systemd unit 文件
 │       └── tests/
-├── examples/                      # Server-side reference implementations
-├── scripts/                       # Build/release tooling
-├── docs/                          # Technical documentation
-└── .github/workflows/             # CI (release + OpenWiki)
+├── examples/                      # 服务端参考实现
+├── scripts/                       # 构建/发布工具
+├── docs/                          # 技术文档
+└── .github/workflows/             # CI（发布 + OpenWiki）
 ```
 
-## Core Crate (`crates/core`)
+## Core Crate（`crates/core`）
 
-Framework-free domain models and protocol types. No dependency on Tauri, Axum, Clap, or SQLite.
+无框架依赖的领域模型和协议类型。不依赖 Tauri、Axum、Clap 或 SQLite。
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `protocol.rs` | `ClientMessage`/`ServerMessage` types, `JobStatus`, `ErrorCode`, `PrintJobInput` validation, `SupportedFormat` enum. | `validate_for_acceptance` is the gatekeeper for job acceptance. Error codes are protocol-stable. Now includes `Html` and `RawHtml` formats + `html`/`wait_ms` fields. |
-| `config.rs` | `AgentConfig` + section structs, defaults, `load`/`save`, `normalized`, data dir resolution. | `normalized()` forces `host=127.0.0.1`. Config types must match frontend `types.ts`. |
-| `ip_whitelist.rs` | IP/CIDR validation, `is_client_ip_allowed`, rejects allow-all entries. | `127.0.0.1` is forced and immutable. Does NOT trust proxy headers. |
-| `printing.rs` | `PrintBackend` trait, `PrinterInfo`, `PaperInfo`, `PrintOptions`, `PrintSubmission`, `PrintTrackingOutcome`. | These are framework-free types — platform implementations live in `crates/runtime`. |
-| `queue.rs` | Queue state types and `QueueError`. | |
-| `remote_protocol.rs` | `RemoteTask` enum + flexible parser. | Parser accepts single object, array, null, or empty string. |
-| `activity.rs` | `TaskHistoryJob`, `TaskHistoryEvent`, `TaskLogEntry` — shared activity types. | |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `protocol.rs` | `ClientMessage`/`ServerMessage` 类型，`JobStatus`，`ErrorCode`，`PrintJobInput` 校验，`SupportedFormat` 枚举。 | `validate_for_acceptance` 是作业接受的守门人。错误码是协议稳定的。现已包含 `Html` 和 `RawHtml` 格式 + `html`/`wait_ms` 字段。 |
+| `config.rs` | `AgentConfig` + 各配置段结构体，默认值，`load`/`save`，`normalized`，数据目录解析。 | `normalized()` 强制 `host=127.0.0.1`。配置类型必须与前端 `types.ts` 匹配。 |
+| `ip_whitelist.rs` | IP/CIDR 校验，`is_client_ip_allowed`，拒绝允许所有条目。 | `127.0.0.1` 被强制且不可变。不信任代理头。 |
+| `printing.rs` | `PrintBackend` trait，`PrinterInfo`，`PaperInfo`，`PrintOptions`，`PrintSubmission`，`PrintTrackingOutcome`。 | 这些是无框架类型——平台实现位于 `crates/runtime`。 |
+| `queue.rs` | 队列状态类型和 `QueueError`。 | |
+| `remote_protocol.rs` | `RemoteTask` 枚举 + 灵活解析器。 | 解析器接受单个对象、数组、null 或空字符串。 |
+| `activity.rs` | `TaskHistoryJob`，`TaskHistoryEvent`，`TaskLogEntry`——共享活动类型。 | |
 
-## Runtime Crate (`crates/runtime`)
+## Runtime Crate（`crates/runtime`）
 
-AgentRuntime lifecycle, platform adapters, and all background tasks.
+AgentRuntime 生命周期、平台适配器和所有后台任务。
 
-### Agent Lifecycle
+### Agent 生命周期
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `agent.rs` | `AgentRuntime` (pre-start), `AgentHandle` (running). `start()` binds listener, spawns server/queue/remote/IPC tasks. | All four tasks share a `CancellationToken`. `shutdown()` waits for completion and deletes the IPC socket. |
-| `builder.rs` | `RuntimeBuilder` — paths + optional print backend and HTML renderer → `AgentRuntime`. `RuntimePaths` (config, data, runtime dirs). | Defaults: `printing::default_backend()` and `BrowserHtmlRenderer`. |
-| `state.rs` | `AgentState` — shared container: config, queue, stores, print backend, HTML renderer, IPC executor. | Cloned cheaply via `Arc`. The `status_events` broadcast has capacity 128. |
-| `command_executor.rs` | `RuntimeCommandExecutor` — offline executor for `Command` (used when Agent is not running). | |
-| `doctor.rs` | `run_doctor` — read-only diagnostic checks (config validity, data dir, port, printers, browser, office, systemd, remote). | Checks browser (Chrome/Chromium) and LibreOffice availability. |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `agent.rs` | `AgentRuntime`（启动前），`AgentHandle`（运行中）。`start()` 绑定监听器，启动 server/queue/remote/IPC 任务。 | 四个任务共享一个 `CancellationToken`。`shutdown()` 等待完成并删除 IPC socket。 |
+| `builder.rs` | `RuntimeBuilder`——路径 + 可选打印后端和 HTML 渲染器 → `AgentRuntime`。`RuntimePaths`（配置、数据、运行时目录）。 | 默认：`printing::default_backend()` 和 `BrowserHtmlRenderer`。 |
+| `state.rs` | `AgentState`——共享容器：配置、队列、stores、打印后端、HTML 渲染器、IPC 执行器。 | 通过 `Arc` 低成本克隆。`status_events` 广播容量为 128。 |
+| `command_executor.rs` | `RuntimeCommandExecutor`——`Command` 的离线执行器（Agent 未运行时使用）。 | |
+| `doctor.rs` | `run_doctor`——只读诊断检查（配置有效性、数据目录、端口、打印机、浏览器、Office、systemd、远程）。 | 检查浏览器（Chrome/Chromium）和 LibreOffice 可用性。 |
 
-### Server & IPC
+### 服务器与 IPC
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `server.rs` | Axum router exposing only `/ws`. IP whitelist middleware, WebSocket handler, Origin validation. | No HTTP REST endpoints — config/logs/printers/test-print are handled via Tauri commands or CLI/IPC. |
-| `ipc/mod.rs` | Platform dispatch for local IPC (Unix socket on Unix, named pipe on Windows). | 4-byte big-endian length prefix, JSON envelope, protocol v1, max 8 MiB frames. Socket at `agent.sock` with `0660` permissions. |
-| `ipc/unix.rs` | Unix domain socket implementation. | |
-| `ipc/windows.rs` | Named pipe implementation. | |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `server.rs` | Axum 路由，仅暴露 `/ws`。IP 白名单中间件，WebSocket 处理器，Origin 校验。 | 无 HTTP REST 端点——配置/日志/打印机/测试打印通过 Tauri 命令或 CLI/IPC 处理。 |
+| `ipc/mod.rs` | 本地 IPC 的平台分发（Unix 上 Unix socket，Windows 上命名管道）。 | 4 字节大端长度前缀，JSON 信封，协议版本 1，最大 8 MiB 帧。Socket 位于 `agent.sock`，权限 `0660`。 |
+| `ipc/unix.rs` | Unix 域 socket 实现。 | |
+| `ipc/windows.rs` | 命名管道实现。 | |
 
-### Print Queue & Pipeline
+### 打印队列与流水线
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `queue.rs` | `QueueState` (FIFO + dedup), `run_worker` (serial loop), `process_job_inner` (download → convert → print). Separate paths for `html`, `raw-html`, and `raw` jobs. | Single worker = strict serial execution. `print_html_job` renders to temp PDF then reuses PDF submission path. Temp file cleanup is critical. |
-| `printing/mod.rs` | Platform dispatch (`default_backend`), `sumatra_print_settings`. | Backend is compile-time selected (`#[cfg(target_os = ...)]`). |
-| `printing/cups.rs` | macOS/Linux backend: `lp`, `lpstat`, `lpoptions`. Job tracking via `lpstat -W completed`. | Parsing `lp` output for job ID is fragile. |
-| `printing/windows.rs` | Windows backend: SumatraPDF CLI for PDF, Win32 Spooler API for raw. | No job tracking (`tracking_supported: false`). |
-| `document.rs` | Magic byte detection (PDF/PNG/JPEG), image→PDF conversion via `printpdf`. | 203 DPI assumption for label printers. |
-| `office.rs` + `office/` | Office format detection + conversion. macOS/Linux: LibreOffice (`libreoffice.rs`). Windows: native COM (`windows.rs`). | Conversion fidelity depends on LibreOffice rendering — not guaranteed to match MS Office. 120s conversion timeout. |
-| `download.rs` | `download_to_temp`: HTTP/HTTPS streaming + data URL. Two-layer size enforcement. Timeout. | Content-Length check + streaming byte count. Partial file cleanup on error. |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `queue.rs` | `QueueState`（FIFO + 去重），`run_worker`（串行循环），`process_job_inner`（下载 → 转换 → 打印）。`html`、`raw-html` 和 `raw` 作业有独立路径。 | 单 worker = 严格串行执行。`print_html_job` 渲染为临时 PDF 后复用 PDF 提交路径。临时文件清理至关重要。 |
+| `printing/mod.rs` | 平台分发（`default_backend`），`sumatra_print_settings`。 | 后端在编译时选择（`#[cfg(target_os = ...)]`）。 |
+| `printing/cups.rs` | macOS/Linux 后端：`lp`、`lpstat`、`lpoptions`。通过 `lpstat -W completed` 跟踪作业。 | 从 `lp` 输出解析作业 ID 较脆弱。 |
+| `printing/windows.rs` | Windows 后端：PDF 使用 SumatraPDF CLI，raw 使用 Win32 Spooler API。 | 无作业跟踪（`tracking_supported: false`）。 |
+| `document.rs` | Magic byte 检测（PDF/PNG/JPEG），通过 `printpdf` 进行图片→PDF 转换。 | 标签打印机假设 203 DPI。 |
+| `office.rs` + `office/` | Office 格式检测 + 转换。macOS/Linux：LibreOffice（`libreoffice.rs`）。Windows：原生 COM（`windows.rs`）。 | 转换保真度取决于 LibreOffice 渲染——不保证与 MS Office 完全一致。120 秒转换超时。 |
+| `download.rs` | `download_to_temp`：HTTP/HTTPS 流式 + data URL。双层大小限制。超时。 | Content-Length 检查 + 流式字节计数。出错时清理部分文件。 |
 
-### HTML Rendering (`html/`)
+### HTML 渲染（`html/`）
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `mod.rs` | `HtmlRenderer` trait, `HtmlRenderRequest`, `HtmlSource` (Url or Inline), `HtmlRenderError`. | Trait is async (`Pin<Box<dyn Future>>`), allows test injection. |
-| `browser.rs` | `BrowserHtmlRenderer` — finds Chrome/Chromium/Edge, launches with proxy, renders to PDF via CDP. | Renders through a filtering proxy for SSRF protection. 60s render timeout, 10s per CDP operation. Discovers browsers by platform-specific paths. |
-| `resource_policy.rs` | `ResourcePolicy` — blocks non-public IPs (loopback, private, link-local, multicast). Resolves DNS before connecting. | Prevents SSRF to internal services. Blocks `file:`, `data:`, `localhost`, `127.0.0.1`, `10.x`, `169.254.x`, etc. |
-| `proxy.rs` | `FilteringProxy` — local HTTP proxy that intercepts all browser resource requests and applies `ResourcePolicy`. | All Chrome traffic is forced through the proxy via `--proxy-server`. Rejected resources abort the render with `BlockedResource`. |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `mod.rs` | `HtmlRenderer` trait，`HtmlRenderRequest`，`HtmlSource`（Url 或 Inline），`HtmlRenderError`。 | Trait 是异步的（`Pin<Box<dyn Future>>`），允许测试注入。 |
+| `browser.rs` | `BrowserHtmlRenderer`——查找 Chrome/Chromium/Edge，带代理启动，通过 CDP 渲染为 PDF。 | 通过过滤代理渲染以防止 SSRF。60 秒渲染超时，每个 CDP 操作 10 秒。按平台特定路径发现浏览器。 |
+| `resource_policy.rs` | `ResourcePolicy`——阻止非公共 IP（回环、私有、链路本地、多播）。连接前解析 DNS。 | 防止对内部服务的 SSRF。阻止 `file:`、`data:`、`localhost`、`127.0.0.1`、`10.x`、`169.254.x` 等。 |
+| `proxy.rs` | `FilteringProxy`——本地 HTTP 代理，拦截所有浏览器资源请求并应用 `ResourcePolicy`。 | 所有 Chrome 流量通过 `--proxy-server` 强制经过代理。被拒绝的资源以 `BlockedResource` 中止渲染。 |
 
-### Remote Polling
+### 远程轮询
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `remote_client.rs` | HTTP client: `fetch_tasks`, `report_status`, `test_connection`. | `is_configuration_status()` treats 401/403/404 as config errors → backoff. |
-| `remote_store.rs` | SQLite: `remote_jobs` (dedup) + `remote_status_events` (outbox). | `INSERT OR IGNORE` for idempotency. |
-| `remote_worker.rs` | Infinite loop: poll → enqueue → report. Config error pauses. | Report backoff via `retry_at_string`. |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `remote_client.rs` | HTTP client：`fetch_tasks`、`report_status`、`test_connection`。 | `is_configuration_status()` 将 401/403/404 视为配置错误 → 退避。 |
+| `remote_store.rs` | SQLite：`remote_jobs`（去重）+ `remote_status_events`（outbox）。 | `INSERT OR IGNORE` 保证幂等性。 |
+| `remote_worker.rs` | 无限循环：轮询 → 入队 → 报告。配置错误时暂停。 | 通过 `retry_at_string` 实现报告退避。 |
 
-## CLI Crate (`crates/cli`)
+## CLI Crate（`crates/cli`）
 
-Framework-free command types and CLI parser shared by desktop and headless products.
+无框架依赖的命令类型和 CLI 解析器，由桌面和 headless 产品共享。
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `command.rs` | `Command` enum (GetConfig, SaveConfig, ListPrinters, Doctor, Status, ExportConfig, ImportConfig, etc.). Each command has a `CommandPolicy`. | Adding a command requires updating `policy()` and the executor implementations. |
-| `service.rs` | `CommandService` — dispatches `Command` to online (Agent via IPC) or offline executor based on policy. | Only `NotRunning` errors trigger offline fallback for `OnlinePreferred` commands. |
-| `parser.rs` | Clap command structure (status, config, printer, paper, origin, remote, task, logs, test-remote, test-print, autostart, app, service, ip, doctor). | CLI subcommands must match `Command` variants. |
-| `client.rs` | `LocalClientExecutor` — sends commands via IPC to the running Agent. | |
-| `output.rs` | `CommandResult`, `CommandError`, `AgentStatus`, `DoctorReport`/`DoctorCheck`/`DoctorSummary`, `ProductKind`. | Error kinds map to stable exit codes. |
-| `policy.rs` | `CommandPolicy` enum (`OnlineOnly`, `OnlinePreferred`, `OfflineAllowed`). | |
-| `product.rs` | `ProductCommandAdapter` trait (autostart, language). Desktop adapter enabled; headless uses `UnsupportedProductCommandAdapter`. | |
-| `config_transfer.rs` | Encrypted export/import: Argon2id + AES-256-GCM, field selection, merge, preview diff. | Bearer token has special protection (empty/null → preserve). |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `command.rs` | `Command` 枚举（GetConfig、SaveConfig、ListPrinters、Doctor、Status、ExportConfig、ImportConfig 等）。每个命令有一个 `CommandPolicy`。 | 添加命令需要更新 `policy()` 和执行器实现。 |
+| `service.rs` | `CommandService`——根据策略将 `Command` 分发到在线（通过 IPC 的 Agent）或离线执行器。 | 仅 `NotRunning` 错误会触发 `OnlinePreferred` 命令的离线回退。 |
+| `parser.rs` | Clap 命令结构（status、config、printer、paper、origin、remote、task、logs、test-remote、test-print、autostart、app、service、ip、doctor）。 | CLI 子命令必须与 `Command` 变体匹配。 |
+| `client.rs` | `LocalClientExecutor`——通过 IPC 向运行中的 Agent 发送命令。 | |
+| `output.rs` | `CommandResult`、`CommandError`、`AgentStatus`、`DoctorReport`/`DoctorCheck`/`DoctorSummary`、`ProductKind`。 | 错误类型映射到稳定的退出码。 |
+| `policy.rs` | `CommandPolicy` 枚举（`OnlineOnly`、`OnlinePreferred`、`OfflineAllowed`）。 | |
+| `product.rs` | `ProductCommandAdapter` trait（自启动、语言）。桌面适配器已启用；headless 使用 `UnsupportedProductCommandAdapter`。 | |
+| `config_transfer.rs` | 加密导出/导入：Argon2id + AES-256-GCM，字段选择，合并，预览 diff。 | Bearer token 有特殊保护（空/null → 保留原值）。 |
 
-### History & Diagnostics
+### 历史与诊断
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `task_history.rs` | SQLite: `task_history_jobs` (aggregate) + `task_history_events` (append-only). | `finished_at` set only for terminal statuses. |
-| `logs.rs` | `LogStore` — in-memory ring buffer (500 entries). Not persisted. | Drops oldest when full. |
-| `test_print.rs` | Calibration test page generation. | Uses default printer + paper. |
-| `agent_guard.rs` | TCP port probe to detect running instance. | GUI aborts startup; headless returns `RuntimeError::AlreadyRunning`. |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `task_history.rs` | SQLite：`task_history_jobs`（聚合）+ `task_history_events`（仅追加）。 | `finished_at` 仅在终态时设置。 |
+| `logs.rs` | `LogStore`——内存环形缓冲区（500 条）。不持久化。 | 满时丢弃最旧条目。 |
+| `test_print.rs` | 校准测试页生成。 | 使用默认打印机 + 纸张。 |
+| `agent_guard.rs` | TCP 端口探测以检测运行中的实例。 | GUI 中止启动；headless 返回 `RuntimeError::AlreadyRunning`。 |
 
-## App Crates
+## App Crate
 
-### Desktop (`apps/desktop`)
+### 桌面（`apps/desktop`）
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `src-tauri/src/main.rs` | Binary entry. | |
-| `src-tauri/src/lib.rs` | Tauri app setup: runtime builder, tray, command service wiring (online + offline executor), window close intercept. | Re-exports `print_bridge_runtime` and `print_bridge_core` modules. Window close hides to tray. |
-| `src-tauri/src/cli.rs` | Desktop CLI dispatch. | |
-| `src-tauri/src/product_cli.rs` | `DesktopProductCommandAdapter` — autostart via `auto_launch`, language setting. | macOS uses `LaunchAgent=false` (uses `.plist` instead). Linux resolves `APPIMAGE` path. |
-| `src-tauri/src/commands.rs` | Tauri commands: config CRUD, export/import, test connection, logs, task history, print test. | `print_test` is settings UI origin only. |
-| `src-tauri/src/tray.rs` | System tray: Open Settings, Test Print, View Logs, Restart, Launch at Startup, Quit. Localized. | `toggle_autostart` persists to config. |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `src-tauri/src/main.rs` | 二进制入口。 | |
+| `src-tauri/src/lib.rs` | Tauri 应用初始化：runtime builder、托盘、命令服务装配（在线 + 离线执行器）、窗口关闭拦截。 | 重新导出 `print_bridge_runtime` 和 `print_bridge_core` 模块。窗口关闭时隐藏到托盘。 |
+| `src-tauri/src/cli.rs` | 桌面 CLI 分发。 | |
+| `src-tauri/src/product_cli.rs` | `DesktopProductCommandAdapter`——通过 `auto_launch` 实现自启动、语言设置。 | macOS 使用 `LaunchAgent=false`（改用 `.plist`）。Linux 解析 `APPIMAGE` 路径。 |
+| `src-tauri/src/commands.rs` | Tauri 命令：配置 CRUD、导出/导入、测试连接、日志、任务历史、测试打印。 | `print_test` 仅限设置界面 origin。 |
+| `src-tauri/src/tray.rs` | 系统托盘：打开设置、测试打印、查看日志、重启、开机启动、退出。已本地化。 | `toggle_autostart` 持久化到配置。 |
 
-### Server (`apps/server`)
+### 服务器（`apps/server`）
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `src/main.rs` | Headless binary entry. No args → help. `serve` → `RuntimeBuilder` + `AgentRuntime::start`. Other args → shared CLI via `run_cli_from`. | Uses `UnsupportedProductCommandAdapter` (autostart managed by systemd, language fixed). |
-| `src/dependencies.rs` | `preflight()` — verifies `lp`/`lpstat`/`lpoptions` (CUPS), `soffice`/`libreoffice`, and Chrome/Chromium on PATH before serve starts. | |
-| `src/paths.rs` | `system_paths()` — resolves `/etc/print-bridge`, `/var/lib/print-bridge`, `/run/print-bridge`. | |
-| `src/readiness.rs` | Sends `READY=1` / `STOPPING=1` to systemd via `sd_notify`. | |
-| `src/signals.rs` | Handles `SIGTERM` / `SIGINT` for graceful shutdown. | |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `src/main.rs` | Headless 二进制入口。无参数 → 帮助。`serve` → `RuntimeBuilder` + `AgentRuntime::start`。其他参数 → 通过 `run_cli_from` 共享 CLI。 | 使用 `UnsupportedProductCommandAdapter`（自启动由 systemd 管理，语言固定）。 |
+| `src/dependencies.rs` | `preflight()`——在 serve 启动前校验 `lp`/`lpstat`/`lpoptions`（CUPS）、`soffice`/`libreoffice` 和 Chrome/Chromium 是否在 PATH 上。 | |
+| `src/paths.rs` | `system_paths()`——解析 `/etc/print-bridge`、`/var/lib/print-bridge`、`/run/print-bridge`。 | |
+| `src/readiness.rs` | 通过 `sd_notify` 向 systemd 发送 `READY=1` / `STOPPING=1`。 | |
+| `src/signals.rs` | 处理 `SIGTERM` / `SIGINT` 以实现优雅关闭。 | |
 
-## Frontend (`apps/desktop/src`)
+## 前端（`apps/desktop/src`）
 
-| File | Responsibility | Watch Out For |
-|------|---------------|---------------|
-| `App.vue` (~71 KB) | Monolithic SFC with all UI: Settings, Remote, Website whitelist, IP whitelist, Tasks, About tabs. No router. | Single file contains all UI logic. Config changes that change port trigger app relaunch in production. |
-| `api.ts` | All API calls via `invoke()` (Tauri commands). No direct HTTP fetch. | Must match Rust types — changes require updating both sides. |
-| `types.ts` | Shared TypeScript types: `AgentConfig`, `PrinterInfo`, `PaperInfo`, `TaskHistoryJob`, `TaskHistoryEvent`. | Must match Rust structs. |
-| `i18n.ts` | vue-i18n v11 (composition mode). zh-CN (default) + en. ~140 keys. | Task status/source labels are inline lookup tables in App.vue. |
-| `updater.ts` | Tauri updater wrapper: check, download+install, relaunch. | Progress via `DownloadEvent` callbacks. |
-| `main.ts` | App entry: creates Vue app, installs vue-i18n, mounts. | |
+| 文件 | 职责 | 注意事项 |
+|------|------|---------|
+| `App.vue`（约 71 KB） | 包含所有 UI 的单体 SFC：设置、远程、网站白名单、IP 白名单、任务、关于标签页。无路由。 | 单文件包含所有 UI 逻辑。改变端口的配置变更在生产环境中会触发应用重启。 |
+| `api.ts` | 所有 API 调用通过 `invoke()`（Tauri 命令）。无直接 HTTP 请求。 | 必须与 Rust 类型匹配——修改需同时更新两端。 |
+| `types.ts` | 共享 TypeScript 类型：`AgentConfig`、`PrinterInfo`、`PaperInfo`、`TaskHistoryJob`、`TaskHistoryEvent`。 | 必须与 Rust 结构体匹配。 |
+| `i18n.ts` | vue-i18n v11（composition 模式）。zh-CN（默认）+ en。约 140 个键。 | 任务状态/来源标签是 App.vue 中的内联查找表。 |
+| `updater.ts` | Tauri 更新器封装：检查、下载+安装、重启。 | 进度通过 `DownloadEvent` 回调。 |
+| `main.ts` | 应用入口：创建 Vue 应用，安装 vue-i18n，挂载。 | |
 
-## Supporting Files
+## 辅助文件
 
-| Path | Purpose |
-|------|---------|
-| `apps/desktop/src-tauri/tauri.conf.json` | App config: identifier `com.vergil.printbridge`, window 960×680, updater endpoint |
-| `apps/desktop/src-tauri/tauri.windows.conf.json` | Windows override: bundles `SumatraPDF.exe` as resource |
-| `apps/desktop/src-tauri/capabilities/default.json` | Main window permissions: core, dialog, opener defaults |
-| `apps/desktop/src-tauri/capabilities/desktop.json` | Desktop permissions: autostart, log, updater, process, dialog, opener |
-| `apps/server/packaging/deb/control` | deb package metadata (`print-bridge-server`, depends systemd + cups-client + libreoffice) |
-| `apps/server/packaging/rpm/print-bridge.spec` | RPM spec file |
-| `apps/server/packaging/systemd/print-bridge.service` | systemd unit: `Type=notify`, runs as `printbridge` user, `ProtectSystem=strict` |
-| `scripts/release.mjs` | Interactive release: version sync, tag check, push to `release` branch |
-| `scripts/build-server-packages.sh` | Builds deb/rpm packages for the headless server |
-| `scripts/patch-updater-json.mjs` | Post-release: rewrites `latest.json` asset URLs |
-| `scripts/release-version.mjs` | Version validation for coordinated releases |
-| `scripts/verify-config-transfer-examples.mjs` | Runs all config-transfer example self-tests |
-| `.github/workflows/release.yml` | CI: builds desktop (macOS ARM+Intel, Linux, Windows) and server (deb/rpm) packages |
-| `.github/workflows/sync-release-notes.yml` | Syncs release notes |
-| `.github/workflows/openwiki-update.yml` | Scheduled OpenWiki doc refresh |
-| `AGENTS.md` | AI agent development instructions (Chinese) |
-| `docs/printbridge-technical.md` | Detailed technical documentation (Chinese) |
-| `docs/printbridge-technical_en.md` | English technical documentation |
+| 路径 | 用途 |
+|------|------|
+| `apps/desktop/src-tauri/tauri.conf.json` | 应用配置：标识符 `com.vergil.printbridge`，窗口 960×680，更新器端点 |
+| `apps/desktop/src-tauri/tauri.windows.conf.json` | Windows 覆盖配置：打包 `SumatraPDF.exe` 作为资源 |
+| `apps/desktop/src-tauri/capabilities/default.json` | 主窗口权限：core、dialog、opener 默认 |
+| `apps/desktop/src-tauri/capabilities/desktop.json` | 桌面权限：自启动、日志、更新器、进程、dialog、opener |
+| `apps/server/packaging/deb/control` | deb 包元数据（`print-bridge-server`，依赖 systemd + cups-client + libreoffice） |
+| `apps/server/packaging/rpm/print-bridge.spec` | RPM spec 文件 |
+| `apps/server/packaging/systemd/print-bridge.service` | systemd unit：`Type=notify`，以 `printbridge` 用户运行，`ProtectSystem=strict` |
+| `scripts/release.mjs` | 交互式发布：版本同步、标签检查、推送至 `release` 分支 |
+| `scripts/build-server-packages.sh` | 为 headless 服务器构建 deb/rpm 包 |
+| `scripts/patch-updater-json.mjs` | 发布后：重写 `latest.json` 资源 URL |
+| `scripts/release-version.mjs` | 协调发布的版本校验 |
+| `scripts/verify-config-transfer-examples.mjs` | 运行所有配置传输示例自测 |
+| `.github/workflows/release.yml` | CI：构建桌面（macOS ARM+Intel、Linux、Windows）和服务器（deb/rpm）包 |
+| `.github/workflows/sync-release-notes.yml` | 同步发布说明 |
+| `.github/workflows/openwiki-update.yml` | 定时 OpenWiki 文档刷新 |
+| `AGENTS.md` | AI agent 开发指南（中文） |
+| `docs/printbridge-technical.md` | 详细技术文档（中文） |
+| `docs/printbridge-technical_en.md` | 英文技术文档 |

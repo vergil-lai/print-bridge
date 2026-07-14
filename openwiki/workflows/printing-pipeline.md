@@ -1,10 +1,10 @@
-# Printing Pipeline
+# 打印流水线
 
-The printing pipeline is the core processing path: from job acceptance through download, format conversion, platform-specific printing, and status tracking. All jobs — whether from WebSocket or remote polling — flow through the same serial FIFO queue.
+打印流水线是核心处理路径：从作业接受到下载、格式转换、平台特定打印和状态跟踪。所有作业——无论来自 WebSocket 还是远程轮询——都经过同一个串行 FIFO 队列。
 
-## Serial Queue Architecture
+## 串行队列架构
 
-The print queue is a strict FIFO implemented with `VecDeque<QueuedJob>` in `QueueState` (`queue.rs`):
+打印队列是在 `QueueState`（`queue.rs`）中用 `VecDeque<QueuedJob>` 实现的严格 FIFO：
 
 ```rust
 struct QueueState {
@@ -14,143 +14,143 @@ struct QueueState {
 }
 ```
 
-**Dedup:** Every `job_id` is checked against `seen_job_ids` before acceptance. Duplicates are rejected with `JOB_DUPLICATED`. Batch jobs additionally check `batch_id` uniqueness against `seen_batch_ids`.
+**去重：** 每个 `job_id` 在接受前都会与 `seen_job_ids` 比对。重复的将被拒绝并返回 `JOB_DUPLICATED`。批量作业额外检查 `batch_id` 相对于 `seen_batch_ids` 的唯一性。
 
-**Serial execution** is enforced by a single worker loop:
+**串行执行**由单 worker 循环强制保证：
 
 ```rust
 loop {
     if let Some(job) = state.queue.lock().await.pop_next() {
-        process_job(&state, job).await;  // completes fully before next
+        process_job(&state, job).await;  // 完全完成后才处理下一个
         continue;
     }
-    state.queue_notify.notified().await;  // sleep until notified
+    state.queue_notify.notified().await;  // 休眠直到被通知
 }
 ```
 
-A `print_lock` (`Arc<Mutex<()>>`) provides an additional guarantee: even if multiple workers existed, only one platform print command executes at a time. Currently only one worker runs per process.
+`print_lock`（`Arc<Mutex<()>>`）提供额外保障：即使存在多个 worker，同一时间也只有一个平台打印命令在执行。目前每个进程只运行一个 worker。
 
-## Job Acceptance Flow
+## 作业接受流程
 
-Jobs enter the queue from two sources:
+作业从两个来源进入队列：
 
-1. **WebSocket** — `protocol.rs` validates each `print`/`print_batch` message (`validate_for_acceptance`), then calls `queue.accept_job()` or `queue.accept_batch()`. The connection immediately receives `JobStatus::Queued`.
+1. **WebSocket**——`protocol.rs` 校验每个 `print`/`print_batch` 消息（`validate_for_acceptance`），然后调用 `queue.accept_job()` 或 `queue.accept_batch()`。连接立即收到 `JobStatus::Queued`。
 
-2. **Remote polling** — `remote_worker.rs` validates remote tasks and calls `queue.accept_remote_job()` or `queue.accept_remote_batch()`, after SQLite-based dedup in `remote_store.rs`.
+2. **远程轮询**——`remote_worker.rs` 校验远程任务并调用 `queue.accept_remote_job()` 或 `queue.accept_remote_batch()`，在 `remote_store.rs` 中进行基于 SQLite 的去重。
 
-In both cases, `queue_notify.notify_one()` wakes the worker.
+两种情况下，`queue_notify.notify_one()` 都会唤醒 worker。
 
-## Job Processing Pipeline (`process_job_inner`)
+## 作业处理流水线（`process_job_inner`）
 
-Once dequeued, each job follows this path:
+出队后，每个作业遵循以下路径：
 
 ```
-Pop from queue
+从队列弹出
     │
-    ├── Format = html / raw-html?
-    │   ├── html: validate file_url (absolute http/https) → render via Chrome/Chromium
-    │   └── raw-html: render inline HTML via Chrome/Chromium
-    │       └── Browser launches with filtering proxy → CDP PrintToPDF → temp PDF → print
+    ├── 格式 = html / raw-html?
+    │   ├── html: 校验 file_url（绝对 http/https）→ 通过 Chrome/Chromium 渲染
+    │   └── raw-html: 通过 Chrome/Chromium 渲染内联 HTML
+    │       └── 浏览器带过滤代理启动 → CDP PrintToPDF → 临时 PDF → 打印
     │
-    ├── Format = raw?
-    │   ├── Yes → decode base64 → resolve printer → print_raw() → track status
+    ├── 格式 = raw?
+    │   ├── 是 → 解码 base64 → 解析打印机 → print_raw() → 跟踪状态
     │
-    ├── Download file_url to temp (pdf / image / office)
-    │   ├── HTTP/HTTPS: stream with size enforcement (Content-Length + byte count)
-    │   └── data: URL: base64-decode directly
+    ├── 下载 file_url 到临时文件（pdf / 图片 / office）
+    │   ├── HTTP/HTTPS: 带大小限制的流式下载（Content-Length + 字节计数）
+    │   └── data: URL: 直接 base64 解码
     │
-    ├── Resolve printer (specified or default) + paper (specified or default)
+    ├── 解析打印机（指定或默认）+ 纸张（指定或默认）
     │
-    ├── Convert to PDF if needed
-    │   ├── Office (docx/xlsx/pptx) → office_to_pdf() via LibreOffice or Windows COM
-    │   ├── Image (PNG/JPEG) → image_to_pdf() via printpdf crate (fit-contain, 203 DPI)
-    │   └── PDF → normalize_pdf_path() (ensure .pdf extension for print tools)
+    ├── 如需要则转换为 PDF
+    │   ├── Office（docx/xlsx/pptx）→ office_to_pdf()，通过 LibreOffice 或 Windows COM
+    │   ├── 图片（PNG/JPEG）→ image_to_pdf()，通过 printpdf crate（适应纸张，203 DPI）
+    │   └── PDF → normalize_pdf_path()（确保 .pdf 扩展名以适配打印工具）
     │
-    ├── Submit to OS print queue via platform backend
+    ├── 通过平台后端提交到操作系统打印队列
     │   ├── Windows: SumatraPDF.exe -silent -print-to ...
     │   └── macOS/Linux: lp -d "{printer}" -n {copies} -o media={media}
     │
-    ├── Track status (CUPS only)
+    ├── 跟踪状态（仅 CUPS）
     │
-    └── Cleanup temp files
+    └── 清理临时文件
 ```
 
-On any `Err` at any stage, the job is logged as `JobStatus::Failed` with the error message.
+任何阶段出现 `Err`，作业将记录为 `JobStatus::Failed` 并附带错误信息。
 
-## Format Detection
+## 格式检测
 
-PrintBridge uses **magic byte detection** to verify file content matches the declared format:
+PrintBridge 使用 **magic byte 检测**来验证文件内容与声明的格式是否匹配：
 
-| Magic Bytes | Format | Detection Location |
-|-------------|--------|-------------------|
+| Magic Bytes | 格式 | 检测位置 |
+|-------------|------|---------|
 | `%PDF-` | PDF | `document.rs` |
 | `\x89PNG\r\n\x1a\n` | PNG | `document.rs` |
 | `\xFF\xD8\xFF` | JPEG | `document.rs` |
-| ZIP with `word/document.xml` | Docx | `office.rs` |
-| ZIP with `xl/workbook.xml` | Xlsx | `office.rs` |
-| ZIP with `ppt/presentation.xml` | Pptx | `office.rs` |
+| 含 `word/document.xml` 的 ZIP | Docx | `office.rs` |
+| 含 `xl/workbook.xml` 的 ZIP | Xlsx | `office.rs` |
+| 含 `ppt/presentation.xml` 的 ZIP | Pptx | `office.rs` |
 
-If declared format doesn't match detected bytes → `FORMAT_MISMATCH` error.
+如果声明的格式与检测到的字节不匹配 → 返回 `FORMAT_MISMATCH` 错误。
 
-## Image → PDF Conversion
+## 图片 → PDF 转换
 
-Images are converted to single-page PDFs using the `printpdf` crate (`document.rs`, `image_to_pdf`):
+图片通过 `printpdf` crate（`document.rs`，`image_to_pdf`）转换为单页 PDF：
 
-- Image is **fit-contained** into the target paper dimensions (centered, aspect-preserved)
-- Default DPI assumption: **203 DPI** (standard for label printers)
-- Paper dimensions come from the job's `paper` field or config default
+- 图片**适应包含**到目标纸张尺寸（居中，保持宽高比）
+- 默认 DPI 假设：**203 DPI**（标签打印机标准）
+- 纸张尺寸来自作业的 `paper` 字段或配置默认值
 
-## Office → PDF Conversion
+## Office → PDF 转换
 
-Office documents (docx/xlsx/pptx) are converted to PDF via the platform's native Office software (`office.rs` + `office/`). On macOS/Linux, LibreOffice (`soffice`/`libreoffice`) is invoked in an isolated profile with macro security level set to maximum. On Windows, the native Windows COM interface is used. Conversion has a 120-second timeout. Print results depend on LibreOffice rendering — not guaranteed to match Microsoft Office or WPS exactly.
+Office 文档（docx/xlsx/pptx）通过平台原生 Office 软件转换为 PDF（`office.rs` + `office/`）。在 macOS/Linux 上，在隔离的 profile 中调用 LibreOffice（`soffice`/`libreoffice`），宏安全级别设为最高。在 Windows 上，使用原生 Windows COM 接口。转换有 120 秒超时。打印结果取决于 LibreOffice 的渲染——不保证与 Microsoft Office 或 WPS 完全一致。
 
-## HTML Rendering Pipeline
+## HTML 渲染流水线
 
-HTML and raw-html jobs bypass the download stage. Instead, they are rendered to a temp PDF by the `HtmlRenderer` (default: `BrowserHtmlRenderer`):
+HTML 和 raw-html 作业跳过下载阶段，由 `HtmlRenderer`（默认：`BrowserHtmlRenderer`）渲染为临时 PDF：
 
-1. **Browser discovery** — finds Chrome, Chromium, or Edge in platform-specific locations
-2. **Filtering proxy** — a local HTTP proxy intercepts all browser resource requests. `ResourcePolicy` blocks non-public IPs (loopback, private, link-local, multicast, `file:`, `data:` schemes). DNS is resolved before connecting to prevent DNS rebinding.
-3. **Render** — the browser navigates to the target URL (or loads inline HTML), waits `wait_ms` milliseconds (default 1000, max 30000), then exports to PDF via CDP `Page.printToPDF`.
-4. The resulting temp PDF is submitted through the normal PDF print path, then cleaned up.
+1. **浏览器发现**——在平台特定位置查找 Chrome、Chromium 或 Edge
+2. **过滤代理**——本地 HTTP 代理拦截所有浏览器资源请求。`ResourcePolicy` 阻止非公共 IP（回环、私有、链路本地、多播、`file:`、`data:` 协议）。连接前解析 DNS 以防止 DNS 重绑定。
+3. **渲染**——浏览器导航到目标 URL（或加载内联 HTML），等待 `wait_ms` 毫秒（默认 1000，最大 30000），然后通过 CDP `Page.printToPDF` 导出为 PDF。
+4. 生成的临时 PDF 通过常规 PDF 打印路径提交，然后清理。
 
-If a blocked resource is detected, the render fails with `HtmlRenderError::BlockedResource` and the job is marked as failed.
+如果检测到被阻止的资源，渲染将以 `HtmlRenderError::BlockedResource` 失败，作业标记为失败。
 
-## Download Safety (`download.rs`)
+## 下载安全（`download.rs`）
 
-`download_to_temp` enforces safety at two levels:
-1. **Content-Length header check** — rejects before download starts if the header exceeds the limit
-2. **Streaming byte enforcement** — also enforces the limit during streaming download
+`download_to_temp` 在两个层面实施安全保护：
+1. **Content-Length 头检查**——如果头超过限制，在下载开始前即拒绝
+2. **流式字节限制**——在流式下载过程中也强制执行限制
 
-Downloads have a configurable timeout (`limits.download_timeout_seconds`, default 30s). Partial files are cleaned up on error.
+下载有可配置的超时（`limits.download_timeout_seconds`，默认 30 秒）。出错时清理部分下载文件。
 
-Supported URL schemes: `http://`, `https://`, `data:application/pdf;base64,...`.
+支持的 URL 协议：`http://`、`https://`、`data:application/pdf;base64,...`。
 
-## Status Tracking
+## 状态跟踪
 
-After job submission to the OS print queue:
+作业提交到操作系统打印队列后：
 
-| Platform | Tracking | How |
-|----------|----------|-----|
-| macOS/Linux | **Yes** | `lpstat -W completed -o` — checks if the system job ID appears in completed list |
-| Windows | **No** | SumatraPDF and Win32 spooler API don't expose trackable status; `tracking_supported: false` |
+| 平台 | 是否跟踪 | 方式 |
+|------|---------|------|
+| macOS/Linux | **是** | `lpstat -W completed -o`——检查系统作业 ID 是否出现在已完成列表中 |
+| Windows | **否** | SumatraPDF 和 Win32 Spooler API 不暴露可跟踪的状态；`tracking_supported: false` |
 
-On macOS/Linux, tracking can result in `Completed`, `Failed`, or `Unknown` (if the job can't be found).
+在 macOS/Linux 上，跟踪结果可能是 `Completed`、`Failed` 或 `Unknown`（如果找不到作业）。
 
-## Dedup and Idempotency
+## 去重与幂等性
 
-- **WebSocket:** `seen_job_ids` in in-memory `QueueState` — persists for the lifetime of the process
-- **Remote polling:** `remote_jobs` table in `remote.sqlite3` — persists across restarts (see [Remote Task Polling](remote-polling.md))
+- **WebSocket：** 内存中 `QueueState` 的 `seen_job_ids`——进程生命周期内持久
+- **远程轮询：** `remote.sqlite3` 中的 `remote_jobs` 表——跨重启持久化（见[远程任务轮询](remote-polling.md)）
 
-Both use `job_id` as the dedup key.
+两者均使用 `job_id` 作为去重键。
 
-## Source References
+## 源码参考
 
-| Area | File |
+| 领域 | 文件 |
 |------|------|
-| Queue state + worker loop + job processing | `crates/runtime/src/queue.rs` |
-| Format detection + image→PDF | `crates/runtime/src/document.rs` |
-| Office detection + conversion | `crates/runtime/src/office.rs`, `office/libreoffice.rs`, `office/windows.rs` |
-| HTML rendering (browser, proxy, policy) | `crates/runtime/src/html/` |
-| Download to temp | `crates/runtime/src/download.rs` |
-| Platform print backends | `crates/runtime/src/printing/mod.rs`, `cups.rs`, `windows.rs` |
-| Message validation + job types | `crates/core/src/protocol.rs` |
+| 队列状态 + worker 循环 + 作业处理 | `crates/runtime/src/queue.rs` |
+| 格式检测 + 图片→PDF | `crates/runtime/src/document.rs` |
+| Office 检测 + 转换 | `crates/runtime/src/office.rs`、`office/libreoffice.rs`、`office/windows.rs` |
+| HTML 渲染（浏览器、代理、策略） | `crates/runtime/src/html/` |
+| 下载到临时文件 | `crates/runtime/src/download.rs` |
+| 平台打印后端 | `crates/runtime/src/printing/mod.rs`、`cups.rs`、`windows.rs` |
+| 消息校验 + 作业类型 | `crates/core/src/protocol.rs` |
