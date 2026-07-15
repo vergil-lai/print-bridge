@@ -19,8 +19,8 @@ PrintBridge does not replace printer drivers and does not bypass the operating s
 
 ## Features
 
-- Runs in the system tray and hides the main window by default
-- Supports Windows, macOS, and Linux Desktop, plus a systemd-managed Linux headless product
+- Desktop runs in the system tray and hides the main window by default
+- Supports Windows, macOS, and Linux, including Linux headless
 - Local WebSocket service and process-local management IPC
 - Website allowlist (Origin allowlist) to control which web pages may connect, for example `https://example.com`
 - IP allowlist to control which client addresses may access the local service, with single IP and CIDR support

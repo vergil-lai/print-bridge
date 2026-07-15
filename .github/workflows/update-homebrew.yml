@@ -1,0 +1,117 @@
+name: update-homebrew
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  update-cask:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: macos-latest
+    env:
+      TAP_REPOSITORY: vergil-lai/homebrew-tap
+
+    steps:
+      - name: Checkout PrintBridge
+        uses: actions/checkout@v5
+        with:
+          path: source
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Read release version
+        id: release
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          if [[ ! "$TAG_NAME" =~ ^printbridge-v([0-9A-Za-z.+-]+)$ ]]; then
+            echo "Unexpected release tag: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+      - name: Download macOS release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          mkdir release-assets
+          gh release download "$TAG_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.dmg' \
+            --dir release-assets
+
+      - name: Update Homebrew cask
+        run: >-
+          node source/scripts/update-homebrew-cask.mjs
+          --version "${{ steps.release.outputs.version }}"
+          --assets-dir release-assets
+          --cask tap/Casks/printbridge.rb
+
+      - name: Check whether the cask changed
+        id: changes
+        shell: bash
+        run: |
+          if git -C tap diff --quiet -- Casks/printbridge.rb; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The Homebrew cask is already up to date."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate Homebrew cask
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          brew style tap/Casks/printbridge.rb
+          brew audit --cask --strict tap/Casks/printbridge.rb
+
+      - name: Push update branch
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          BRANCH="automation/printbridge-${VERSION}"
+
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C tap fetch origin "$BRANCH:refs/remotes/origin/$BRANCH" || true
+          git -C tap checkout -B "$BRANCH"
+          git -C tap add Casks/printbridge.rb
+          git -C tap commit -m "chore: update PrintBridge to ${VERSION}"
+          git -C tap push --force-with-lease origin "$BRANCH"
+
+      - name: Create pull request
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        working-directory: tap
+        run: |
+          BRANCH="automation/printbridge-${VERSION}"
+          EXISTING_PR="$(gh pr list --repo "$TAP_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number')"
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Pull request #${EXISTING_PR} already exists."
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$TAP_REPOSITORY" \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore: update PrintBridge to ${VERSION}" \
+            --body "Automated Homebrew Cask update for PrintBridge ${VERSION}."
