@@ -14,7 +14,7 @@ upload_file() {
   key=${file#"$ROOT"/}
 
   echo "Uploading $key"
-  npx --yes wrangler@4 r2 object put "$R2_BUCKET/$key" --file "$file"
+  npx --yes wrangler@4 r2 object put "$R2_BUCKET/$key" --file "$file" --remote
 }
 
 upload_tree() {

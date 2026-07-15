@@ -40,5 +40,5 @@ test('R2 upload publishes immutable files before signed mutable metadata', () =>
   assert.ok(poolIndex >= 0);
   assert.ok(releaseIndex > poolIndex);
   assert.ok(inReleaseIndex > releaseIndex);
-  assert.match(script, /wrangler@4 r2 object put/);
+  assert.match(script, /wrangler@4 r2 object put .* --remote/);
 });
