@@ -50,7 +50,7 @@ async fn shutdown_stops_listener_and_workers() {
     .build()
     .unwrap();
     let handle = runtime.start().await.unwrap();
-    let addr = handle.listen_addr();
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], handle.listen_addr().port()));
 
     assert!(tokio::net::TcpStream::connect(addr).await.is_ok());
     handle.shutdown().await.unwrap();

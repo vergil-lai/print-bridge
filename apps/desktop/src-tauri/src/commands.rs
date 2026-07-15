@@ -72,7 +72,8 @@ pub async fn save_config(
     state: State<'_, AgentState>,
     service: State<'_, Arc<CommandService>>,
 ) -> Result<AgentConfig, CommandError> {
-    let current_port = state.config.read().await.service.port;
+    let current = state.config.read().await.clone();
+    let current_port = current.service.port;
     if config.service.port != current_port {
         check_service_port_available_for_host("0.0.0.0", config.service.port).map_err(
             |message| CommandError::new(print_bridge_cli::CommandErrorKind::InvalidInput, message),
@@ -82,16 +83,26 @@ pub async fn save_config(
     apply_autostart(&app, config.app.autostart).map_err(|message| {
         CommandError::new(print_bridge_cli::CommandErrorKind::Runtime, message)
     })?;
-    let saved = match service.execute(Command::SaveConfig(config)).await? {
-        CommandResult::Config(config) => *config,
-        _ => unreachable!("SaveConfig returned an unexpected result"),
+
+    let saved = match service.execute(Command::SaveConfig(config)).await {
+        Ok(CommandResult::Config(config)) => *config,
+        Ok(_) => unreachable!("SaveConfig returned an unexpected result"),
+        Err(error) => {
+            if let Err(rollback_error) = apply_autostart(&app, current.app.autostart) {
+                return Err(CommandError::new(
+                    print_bridge_cli::CommandErrorKind::Runtime,
+                    format!(
+                        "{error}; failed to restore the previous autostart setting: {rollback_error}"
+                    ),
+                ));
+            }
+            return Err(error);
+        }
     };
-    apply_tray_language(&app, saved.app.language).map_err(|error| {
-        CommandError::new(
-            print_bridge_cli::CommandErrorKind::Runtime,
-            error.to_string(),
-        )
-    })?;
+
+    if let Err(error) = apply_tray_language(&app, saved.app.language) {
+        tauri_plugin_log::log::warn!("failed to sync tray language after save: {error}");
+    }
 
     Ok(saved)
 }
@@ -181,6 +192,10 @@ pub(crate) async fn save_config_for_state(
 /// 通过 Tauri 自启动插件启用或禁用系统开机自启。
 fn apply_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
     let autolaunch = app.autolaunch();
+    let is_enabled = autolaunch.is_enabled().map_err(|error| error.to_string())?;
+    if enabled == is_enabled {
+        return Ok(());
+    }
     if enabled {
         autolaunch.enable()
     } else {

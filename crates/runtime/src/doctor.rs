@@ -9,7 +9,7 @@ use print_bridge_cli::{DoctorCheck, DoctorReport, DoctorStatus, ProductKind};
 use crate::{
     config::AgentConfig,
     html::{
-        browser::{BrowserExecutable, BrowserLocator},
+        browser::{check_browser_launch, BrowserExecutable},
         HtmlRenderError,
     },
     state::AgentState,
@@ -28,7 +28,7 @@ pub async fn run_doctor(
         agent_check(listen_addr),
         port_check(&config, listen_addr),
         printer_check(state),
-        browser_check(BrowserLocator::new().find()),
+        browser_check(check_browser_launch()),
         executable_check("office.available", office_candidates(), office_suggestion()),
     ];
     if product == ProductKind::Headless {

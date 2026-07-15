@@ -14,7 +14,8 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        mpsc::{self, RecvTimeoutError},
+        Arc, Condvar, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -26,6 +27,7 @@ const RENDER_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CDP_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FORCE_LOOPBACK_THROUGH_PROXY: &str = "--proxy-bypass-list=<-loopback>";
+static BROWSER_LAUNCH_GATE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
 fn chrome_proxy_server(proxy_url: &Url) -> String {
     let host = proxy_url
@@ -60,7 +62,7 @@ impl BrowserKind {
     }
 }
 
-/// 已通过版本探测的浏览器可执行文件。
+/// 已发现的浏览器可执行文件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserExecutable {
     pub kind: BrowserKind,
@@ -160,25 +162,44 @@ impl BrowserLocator {
         Self { os, probe }
     }
 
-    /// 返回优先级最高、并能成功返回版本号的浏览器。
+    /// 返回当前平台优先级最高且可用的浏览器。
     pub fn find(&self) -> Result<BrowserExecutable, HtmlRenderError> {
+        Ok(self
+            .available()
+            .map_err(|searched| HtmlRenderError::RendererUnavailable { searched })?
+            .into_iter()
+            .next()
+            .expect("available browser candidates must not be empty"))
+    }
+
+    /// 返回按平台优先级排序的全部可用浏览器。
+    fn available(&self) -> Result<Vec<BrowserExecutable>, Vec<String>> {
         let candidates = self.candidates();
         let searched = candidates
             .iter()
             .map(|(_, candidate)| candidate.display().to_string())
             .collect::<Vec<_>>();
+        let mut available_candidates = Vec::new();
         for (kind, path) in candidates {
-            if (self.os == TargetOs::Linux || self.probe.is_file(&path))
-                && self.probe.has_version(&path)
-            {
-                return Ok(BrowserExecutable {
+            let is_available = match self.os {
+                // Windows 不运行 `--version`，避免激活用户已有的浏览器窗口。
+                TargetOs::Windows => self.probe.is_file(&path),
+                TargetOs::MacOs => self.probe.is_file(&path) && self.probe.has_version(&path),
+                TargetOs::Linux => self.probe.has_version(&path),
+            };
+            if is_available {
+                available_candidates.push(BrowserExecutable {
                     kind,
                     path,
                     label: kind.label(),
                 });
             }
         }
-        Err(HtmlRenderError::RendererUnavailable { searched })
+        if available_candidates.is_empty() {
+            Err(searched)
+        } else {
+            Ok(available_candidates)
+        }
     }
 
     fn candidates(&self) -> Vec<(BrowserKind, PathBuf)> {
@@ -272,7 +293,7 @@ fn linux_candidates(probe: &dyn BrowserProbe) -> Vec<(BrowserKind, PathBuf)> {
 pub struct BrowserDriverRequest {
     proxy_url: Url,
     target_url: Url,
-    profile_path: PathBuf,
+    profile: Arc<tempfile::TempDir>,
     paper: EffectivePaper,
     wait_ms: u64,
     print_background: bool,
@@ -378,6 +399,150 @@ struct InstalledBrowserDriver {
     locator: BrowserLocator,
 }
 
+#[derive(Debug)]
+enum BrowserLaunchAttemptError {
+    Failed(String),
+    TimedOut { timeout_ms: u64 },
+    Abort(HtmlRenderError),
+}
+
+struct BrowserLaunchGuard;
+
+impl BrowserLaunchGuard {
+    /// 在 deadline 前获取全局浏览器启动权，防止累积后台进程。
+    fn acquire(deadline: Instant, timeout_ms: u64) -> Result<Self, BrowserLaunchAttemptError> {
+        let (mutex, condvar) = &BROWSER_LAUNCH_GATE;
+        let mut in_progress = mutex.lock().unwrap_or_else(|error| error.into_inner());
+        while *in_progress {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(BrowserLaunchAttemptError::TimedOut { timeout_ms });
+            }
+            let (next, wait) = condvar
+                .wait_timeout(in_progress, remaining)
+                .unwrap_or_else(|error| error.into_inner());
+            in_progress = next;
+            if wait.timed_out() && *in_progress {
+                return Err(BrowserLaunchAttemptError::TimedOut { timeout_ms });
+            }
+        }
+        *in_progress = true;
+        Ok(Self)
+    }
+}
+
+impl Drop for BrowserLaunchGuard {
+    fn drop(&mut self) {
+        let (mutex, condvar) = &BROWSER_LAUNCH_GATE;
+        let mut in_progress = mutex.lock().unwrap_or_else(|error| error.into_inner());
+        *in_progress = false;
+        condvar.notify_one();
+    }
+}
+
+/// 在独立线程中启动浏览器，并限制调用方等待启动结果的时间。
+fn launch_with_timeout<T: Send + 'static>(
+    timeout: Duration,
+    timeout_ms: u64,
+    launch: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, BrowserLaunchAttemptError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    let guard = BrowserLaunchGuard::acquire(deadline, timeout_ms)?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(BrowserLaunchAttemptError::TimedOut { timeout_ms });
+    }
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("browser-launch".to_owned())
+        .spawn(move || {
+            let _guard = guard;
+            let _ = sender.send(launch());
+        })
+        .map_err(|error| BrowserLaunchAttemptError::Failed(error.to_string()))?;
+
+    match receiver.recv_timeout(remaining) {
+        Ok(Ok(browser)) => Ok(browser),
+        Ok(Err(error)) => Err(BrowserLaunchAttemptError::Failed(error)),
+        Err(RecvTimeoutError::Timeout) => Err(BrowserLaunchAttemptError::TimedOut { timeout_ms }),
+        Err(RecvTimeoutError::Disconnected) => Err(BrowserLaunchAttemptError::Failed(
+            "browser launch worker stopped unexpectedly".to_owned(),
+        )),
+    }
+}
+
+/// 依次启动已发现的浏览器，直到一个浏览器可用于 headless 渲染。
+fn launch_first_available<T>(
+    candidates: Vec<BrowserExecutable>,
+    mut launch: impl FnMut(BrowserExecutable) -> Result<T, BrowserLaunchAttemptError>,
+) -> Result<(T, BrowserExecutable), HtmlRenderError> {
+    let mut failures = Vec::new();
+    for executable in candidates {
+        match launch(executable.clone()) {
+            Ok(browser) => return Ok((browser, executable)),
+            Err(BrowserLaunchAttemptError::Failed(error)) => {
+                failures.push(format!("{}: {error}", executable.path.display()));
+            }
+            Err(BrowserLaunchAttemptError::TimedOut { timeout_ms }) => {
+                return Err(HtmlRenderError::Timeout { timeout_ms });
+            }
+            Err(BrowserLaunchAttemptError::Abort(error)) => return Err(error),
+        }
+    }
+    Err(HtmlRenderError::RendererUnavailable { searched: failures })
+}
+
+/// 按优先级启动浏览器，并在每次尝试前获取剩余启动超时。
+fn launch_headless_browser(
+    locator: &BrowserLocator,
+    profile: Arc<tempfile::TempDir>,
+    proxy_server: Option<&str>,
+    mut attempt_timeout: impl FnMut() -> Result<(Duration, u64), HtmlRenderError>,
+) -> Result<(Browser, BrowserExecutable), HtmlRenderError> {
+    let candidates = locator
+        .available()
+        .map_err(|searched| HtmlRenderError::RendererUnavailable { searched })?;
+    let proxy_server = proxy_server.map(str::to_owned);
+    launch_first_available(candidates, |executable| {
+        let (timeout, timeout_ms) = attempt_timeout().map_err(BrowserLaunchAttemptError::Abort)?;
+        let profile = profile.clone();
+        let proxy_server = proxy_server.clone();
+        launch_with_timeout(timeout, timeout_ms, move || {
+            let options = LaunchOptionsBuilder::default()
+                .path(Some(executable.path))
+                .user_data_dir(Some(profile.path().to_path_buf()))
+                .proxy_server(proxy_server.as_deref())
+                .args(vec![std::ffi::OsStr::new(FORCE_LOOPBACK_THROUGH_PROXY)])
+                .ignore_certificate_errors(false)
+                .headless(true)
+                .sandbox(true)
+                .idle_browser_timeout(timeout.min(MAX_CDP_OPERATION_TIMEOUT))
+                .build()
+                .map_err(|error| error.to_string())?;
+            Browser::new(options).map_err(|error| error.to_string())
+        })
+    })
+}
+
+/// 检查是否有已安装的浏览器可以以 headless 模式启动。
+pub fn check_browser_launch() -> Result<BrowserExecutable, HtmlRenderError> {
+    let profile = Arc::new(tempfile::tempdir()?);
+    let deadline = Instant::now() + RENDER_TIMEOUT;
+    let (_, executable) = launch_headless_browser(&BrowserLocator::new(), profile, None, || {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            Err(HtmlRenderError::Timeout {
+                timeout_ms: RENDER_TIMEOUT.as_millis() as u64,
+            })
+        } else {
+            Ok((remaining, RENDER_TIMEOUT.as_millis() as u64))
+        }
+    })?;
+    Ok(executable)
+}
+
 impl InstalledBrowserDriver {
     fn new() -> Self {
         Self {
@@ -392,24 +557,14 @@ impl BrowserDriver for InstalledBrowserDriver {
         request: BrowserDriverRequest,
         control: BrowserRenderControl,
     ) -> Result<(), HtmlRenderError> {
-        let executable = self.locator.find()?;
-        let cdp_operation_timeout = control.before_cdp_operations(1)?;
+        let cdp_operation_timeout = control.cdp_operation_timeout;
         let proxy_server = chrome_proxy_server(&request.proxy_url);
-        let options = LaunchOptionsBuilder::default()
-            .path(Some(executable.path.clone()))
-            .user_data_dir(Some(request.profile_path.clone()))
-            .proxy_server(Some(&proxy_server))
-            .args(vec![std::ffi::OsStr::new(FORCE_LOOPBACK_THROUGH_PROXY)])
-            .ignore_certificate_errors(false)
-            .headless(true)
-            .sandbox(true)
-            .idle_browser_timeout(cdp_operation_timeout)
-            .build()
-            .map_err(HtmlRenderError::browser_options)?;
-        let browser =
-            Browser::new(options).map_err(|error| HtmlRenderError::RendererUnavailable {
-                searched: vec![executable.path.display().to_string(), error.to_string()],
-            })?;
+        let (browser, _) = launch_headless_browser(
+            &self.locator,
+            request.profile.clone(),
+            Some(&proxy_server),
+            || Ok((control.remaining()?, control.timeout_ms)),
+        )?;
         control.before_cdp_operations(1)?;
         let new_tab_wait_timeout = control.remaining()?.saturating_sub(cdp_operation_timeout);
         browser.set_default_timeout(new_tab_wait_timeout);
@@ -495,11 +650,11 @@ impl HtmlRenderer for BrowserHtmlRenderer {
             let mut proxy = FilteringProxy::start(policy, inline_html).await?;
             let target_url = proxy.target_url(request.source.clone());
             let rejected_resources = proxy.rejection_tracker();
-            let profile = tempfile::tempdir()?;
+            let profile = Arc::new(tempfile::tempdir()?);
             let driver_request = BrowserDriverRequest {
                 proxy_url: proxy.proxy_url().clone(),
                 target_url,
-                profile_path: profile.path().to_path_buf(),
+                profile: profile.clone(),
                 paper: request.paper,
                 wait_ms: request.wait_ms,
                 print_background: true,
@@ -531,7 +686,6 @@ impl HtmlRenderer for BrowserHtmlRenderer {
                 return Err(HtmlRenderError::BlockedResource { resource });
             }
             control.check_active()?;
-            drop(profile);
             Ok(HtmlRenderResult {
                 renderer: "chromium",
                 output_path: request.output_path,
@@ -541,12 +695,6 @@ impl HtmlRenderer for BrowserHtmlRenderer {
 }
 
 impl HtmlRenderError {
-    fn browser_options(error: impl std::fmt::Display) -> Self {
-        Self::Navigation {
-            message: format!("browser launch options are invalid: {error}"),
-        }
-    }
-
     fn navigation(error: impl std::fmt::Display) -> Self {
         Self::Navigation {
             message: error.to_string(),
@@ -563,8 +711,8 @@ impl HtmlRenderError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserDriver, BrowserDriverRequest, BrowserHtmlRenderer, BrowserKind, BrowserLocator,
-        BrowserProbe, TargetOs,
+        BrowserDriver, BrowserDriverRequest, BrowserExecutable, BrowserHtmlRenderer, BrowserKind,
+        BrowserLocator, BrowserProbe, TargetOs,
     };
     use crate::{
         html::{resource_policy::ResourcePolicy, HtmlRenderRequest, HtmlRenderer, HtmlSource},
@@ -588,6 +736,7 @@ mod tests {
     struct FakeProbe {
         files: Vec<PathBuf>,
         commands: HashMap<String, PathBuf>,
+        version_paths: Option<Vec<PathBuf>>,
     }
 
     impl BrowserProbe for FakeProbe {
@@ -599,8 +748,11 @@ mod tests {
             self.commands.get(command).cloned()
         }
 
-        fn has_version(&self, _path: &Path) -> bool {
-            true
+        fn has_version(&self, path: &Path) -> bool {
+            self.version_paths
+                .as_ref()
+                .map(|paths| paths.iter().any(|candidate| candidate == path))
+                .unwrap_or(true)
         }
     }
 
@@ -663,6 +815,104 @@ mod tests {
     }
 
     #[test]
+    fn macos_skips_browsers_that_fail_the_version_probe() {
+        let chrome = PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+        let chromium = PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium");
+        let locator = BrowserLocator::for_test(
+            TargetOs::MacOs,
+            Arc::new(FakeProbe {
+                files: vec![chrome, chromium.clone()],
+                version_paths: Some(vec![chromium]),
+                ..Default::default()
+            }),
+        );
+
+        assert_eq!(locator.find().unwrap().kind, BrowserKind::Chromium);
+    }
+
+    #[test]
+    fn browser_launch_falls_back_to_the_next_available_candidate() {
+        let edge = BrowserExecutable {
+            kind: BrowserKind::Edge,
+            path: PathBuf::from("C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"),
+            label: "edge",
+        };
+        let chrome = BrowserExecutable {
+            kind: BrowserKind::Chrome,
+            path: PathBuf::from("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"),
+            label: "chrome",
+        };
+        let mut attempted = Vec::new();
+
+        let (_, executable) = super::launch_first_available(vec![edge, chrome], |candidate| {
+            attempted.push(candidate.kind);
+            if candidate.kind == BrowserKind::Edge {
+                Err(super::BrowserLaunchAttemptError::Failed(
+                    "blocked by policy".to_owned(),
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+
+        assert_eq!(attempted, vec![BrowserKind::Edge, BrowserKind::Chrome]);
+        assert_eq!(executable.kind, BrowserKind::Chrome);
+    }
+
+    #[test]
+    fn browser_launch_timeout_stops_fallback_before_the_next_candidate() {
+        let edge = BrowserExecutable {
+            kind: BrowserKind::Edge,
+            path: PathBuf::from("edge.exe"),
+            label: "edge",
+        };
+        let chrome = BrowserExecutable {
+            kind: BrowserKind::Chrome,
+            path: PathBuf::from("chrome.exe"),
+            label: "chrome",
+        };
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_launch = attempts.clone();
+
+        let result = super::launch_first_available(vec![edge, chrome], move |_| {
+            attempts_for_launch.fetch_add(1, Ordering::AcqRel);
+            super::launch_with_timeout(Duration::from_millis(5), 5, || {
+                thread::sleep(Duration::from_millis(50));
+                Ok::<(), String>(())
+            })
+        });
+
+        assert!(matches!(
+            result,
+            Err(crate::html::HtmlRenderError::Timeout { timeout_ms: 5 })
+        ));
+        assert_eq!(attempts.load(Ordering::Acquire), 1);
+
+        let short_launch_started = Arc::new(AtomicBool::new(false));
+        let started_with_short_budget = short_launch_started.clone();
+        let overlapping_result =
+            super::launch_with_timeout(Duration::from_millis(5), 5, move || {
+                started_with_short_budget.store(true, Ordering::Release);
+                Ok::<(), String>(())
+            });
+        assert!(matches!(
+            overlapping_result,
+            Err(super::BrowserLaunchAttemptError::TimedOut { timeout_ms: 5 })
+        ));
+        assert!(!short_launch_started.load(Ordering::Acquire));
+
+        let waiting_launch_started = Arc::new(AtomicBool::new(false));
+        let started_after_waiting = waiting_launch_started.clone();
+        super::launch_with_timeout(Duration::from_secs(1), 1_000, move || {
+            started_after_waiting.store(true, Ordering::Release);
+            Ok::<(), String>(())
+        })
+        .unwrap();
+        assert!(waiting_launch_started.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn chrome_proxy_argument_omits_the_url_path_separator() {
         assert_eq!(
             super::chrome_proxy_server(&Url::parse("http://127.0.0.1:43123/").unwrap()),
@@ -681,7 +931,7 @@ mod tests {
             request: BrowserDriverRequest,
             _control: super::BrowserRenderControl,
         ) -> Result<(), crate::html::HtmlRenderError> {
-            assert!(request.profile_path.is_dir());
+            assert!(request.profile.path().is_dir());
             self.requests.lock().unwrap().push(request);
             Ok(())
         }
@@ -721,8 +971,8 @@ mod tests {
             control: super::BrowserRenderControl,
         ) -> Result<(), crate::html::HtmlRenderError> {
             self.saw_profile
-                .store(request.profile_path.is_dir(), Ordering::Release);
-            *self.profile_path.lock().unwrap() = Some(request.profile_path.clone());
+                .store(request.profile.path().is_dir(), Ordering::Release);
+            *self.profile_path.lock().unwrap() = Some(request.profile.path().to_path_buf());
             *self.proxy_url.lock().unwrap() = Some(request.proxy_url);
             while !control.cancelled.load(Ordering::Acquire) {
                 thread::sleep(Duration::from_millis(1));
@@ -876,14 +1126,12 @@ mod tests {
         assert!(!output_path.exists());
         let proxy_url = driver.proxy_url.lock().unwrap().clone().unwrap();
         let proxy_port = proxy_url.port().unwrap();
-        assert!(matches!(
-            tokio::time::timeout(
-                Duration::from_millis(100),
-                tokio::net::TcpStream::connect(("127.0.0.1", proxy_port)),
-            )
-            .await,
-            Ok(Err(_))
-        ));
+        let connection = tokio::time::timeout(
+            Duration::from_millis(100),
+            tokio::net::TcpStream::connect(("127.0.0.1", proxy_port)),
+        )
+        .await;
+        assert!(!matches!(connection, Ok(Ok(_))));
     }
 
     #[tokio::test]
