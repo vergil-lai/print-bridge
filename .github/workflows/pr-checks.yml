@@ -1,0 +1,174 @@
+name: pr-checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  quality-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust workspace
+        run: cargo check --workspace
+
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
+
+      - name: Typecheck desktop frontend
+        run: pnpm --dir apps/desktop typecheck
+
+      - name: Lint desktop frontend
+        run: pnpm --dir apps/desktop lint
+
+      - name: Test desktop frontend
+        run: pnpm --dir apps/desktop test
+
+      - name: Build desktop frontend
+        run: pnpm --dir apps/desktop build
+
+      - name: Test repository scripts
+        run: >-
+          node --test
+          scripts/patch-updater-json.test.mjs
+          scripts/prepare-windows-cli.test.mjs
+          scripts/release-version.test.mjs
+
+  check-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test Windows CLI preparation script
+        run: node --test scripts/prepare-windows-cli.test.mjs
+
+      - name: Prepare Windows CLI sidecar
+        run: node scripts/prepare-windows-cli.mjs x86_64-pc-windows-msvc
+
+      - name: Check Rust workspace
+        run: cargo check --workspace
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
+
+      - name: Typecheck desktop frontend
+        run: pnpm --dir apps/desktop typecheck
+
+      - name: Test desktop frontend
+        run: pnpm --dir apps/desktop test
+
+      - name: Build desktop frontend
+        run: pnpm --dir apps/desktop build
+
+  check-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Rust workspace
+        run: cargo check --workspace
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
+
+      - name: Typecheck desktop frontend
+        run: pnpm --dir apps/desktop typecheck
+
+      - name: Test desktop frontend
+        run: pnpm --dir apps/desktop test
+
+      - name: Build desktop frontend
+        run: pnpm --dir apps/desktop build
