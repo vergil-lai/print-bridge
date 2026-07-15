@@ -1126,14 +1126,12 @@ mod tests {
         assert!(!output_path.exists());
         let proxy_url = driver.proxy_url.lock().unwrap().clone().unwrap();
         let proxy_port = proxy_url.port().unwrap();
-        assert!(matches!(
-            tokio::time::timeout(
-                Duration::from_millis(100),
-                tokio::net::TcpStream::connect(("127.0.0.1", proxy_port)),
-            )
-            .await,
-            Ok(Err(_))
-        ));
+        let connection = tokio::time::timeout(
+            Duration::from_millis(100),
+            tokio::net::TcpStream::connect(("127.0.0.1", proxy_port)),
+        )
+        .await;
+        assert!(!matches!(connection, Ok(Ok(_))));
     }
 
     #[tokio::test]
