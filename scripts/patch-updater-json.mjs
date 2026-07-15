@@ -38,6 +38,15 @@ export function rewriteUpdaterReleaseNotes(updaterJson, releaseBody) {
   return nextJson;
 }
 
+export function findReleaseByTag(releasePages, tagName) {
+  const release = releasePages.flat().find((candidate) => candidate.tag_name === tagName);
+  if (!release) {
+    throw new Error(`Could not find release ${tagName}.`);
+  }
+
+  return release;
+}
+
 async function main() {
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
   const tagName = process.argv[2] || `${TAG_PREFIX}${readPackageVersion()}`;
@@ -56,9 +65,15 @@ async function main() {
     latestJsonPath,
   ]);
 
-  const release = JSON.parse(
-    run('gh', ['api', `repos/${repository}/releases/tags/${tagName}`]).stdout,
+  const releasePages = JSON.parse(
+    run('gh', [
+      'api',
+      '--paginate',
+      '--slurp',
+      `repos/${repository}/releases?per_page=100`,
+    ]).stdout,
   );
+  const release = findReleaseByTag(releasePages, tagName);
   const updaterJson = JSON.parse(readFileSync(latestJsonPath, 'utf8'));
   const updaterJsonWithUrls = rewriteUpdaterAssetUrls(updaterJson, {
     assets: release.assets ?? [],

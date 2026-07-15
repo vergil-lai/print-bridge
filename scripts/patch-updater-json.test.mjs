@@ -1,7 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { rewriteUpdaterAssetUrls, rewriteUpdaterReleaseNotes } from './patch-updater-json.mjs';
+import {
+  findReleaseByTag,
+  rewriteUpdaterAssetUrls,
+  rewriteUpdaterReleaseNotes,
+} from './patch-updater-json.mjs';
+
+test('finds draft releases returned by the releases list endpoint', () => {
+  const release = findReleaseByTag(
+    [
+      [{ tag_name: 'printbridge-v0.2.0', draft: false }],
+      [{ tag_name: 'printbridge-v0.2.1', draft: true, assets: [] }],
+    ],
+    'printbridge-v0.2.1',
+  );
+
+  assert.equal(release.draft, true);
+});
+
+test('throws when the release list does not contain the requested tag', () => {
+  assert.throws(
+    () => findReleaseByTag([[{ tag_name: 'printbridge-v0.2.0' }]], 'printbridge-v0.2.1'),
+    /Could not find release/,
+  );
+});
 
 test('rewrites GitHub API asset URLs to browser download URLs', () => {
   const result = rewriteUpdaterAssetUrls(

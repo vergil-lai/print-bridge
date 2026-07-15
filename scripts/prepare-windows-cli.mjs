@@ -19,13 +19,35 @@ export function sidecarOutputPath(repositoryRoot, target) {
   );
 }
 
+export function sidecarCargoArgs(target) {
+  return [
+    'build',
+    '--release',
+    '-p',
+    'print-bridge-desktop',
+    '--bin',
+    'print-bridge-desktop-cli',
+    '--features',
+    'windows-cli',
+    '--target',
+    target,
+  ];
+}
+
+export function sidecarBuildEnvironment(environment = process.env) {
+  return {
+    ...environment,
+    TAURI_CONFIG: JSON.stringify({ bundle: { externalBin: [] } }),
+  };
+}
+
 export function prepareWindowsCli(target, repositoryRoot = root) {
   validateWindowsTarget(target);
-  const result = spawnSync(
-    'cargo',
-    ['build', '--release', '-p', 'print-bridge-desktop', '--bin', 'print-bridge-desktop-cli', '--target', target],
-    { cwd: repositoryRoot, stdio: 'inherit' },
-  );
+  const result = spawnSync('cargo', sidecarCargoArgs(target), {
+    cwd: repositoryRoot,
+    env: sidecarBuildEnvironment(),
+    stdio: 'inherit',
+  });
   if (result.status !== 0) process.exit(result.status ?? 1);
 
   const source = resolve(repositoryRoot, 'target', target, 'release', 'print-bridge-desktop-cli.exe');
