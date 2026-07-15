@@ -83,6 +83,7 @@ jobs:
           scripts/patch-updater-json.test.mjs
           scripts/prepare-windows-cli.test.mjs
           scripts/release-version.test.mjs
+          scripts/rpm-repository.test.mjs
           scripts/update-homebrew-cask.test.mjs
 
   check-windows:

@@ -1,0 +1,84 @@
+name: publish-rpm
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing stable PrintBridge release tag to publish
+        required: true
+        default: printbridge-v0.2.0
+        type: string
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: ubuntu-22.04
+    env:
+      R2_BUCKET: printbridge-packages
+      R2_PREFIX: rpm
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+
+      - name: Resolve stable release tag
+        id: release
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name || inputs.tag_name }}
+        shell: bash
+        run: |
+          if [[ ! "$TAG_NAME" =~ ^printbridge-v([0-9A-Za-z.+-]+)$ ]]; then
+            echo "Unexpected release tag: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          VERSION="${BASH_REMATCH[1]}"
+          if [ "$(node scripts/release-version.mjs prerelease "$VERSION")" = true ]; then
+            echo "RPM stable repository does not accept prerelease version $VERSION." >&2
+            exit 1
+          fi
+
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Download rpm packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+        run: |
+          mkdir release-assets
+          gh release download "$TAG_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.rpm' \
+            --dir release-assets
+
+      - name: Install RPM repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y createrepo-c rpm gnupg
+
+      - name: Import repository signing key
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        shell: bash
+        run: printf '%s\n' "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: Build signed RPM repository
+        env:
+          REPOSITORY_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+          KEY_FINGERPRINT: ${{ secrets.KEY_FINGERPRINT }}
+        run: bash scripts/build-rpm-repository.sh release-assets rpm-repository
+
+      - name: Upload RPM repository to Cloudflare R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bash scripts/upload-rpm-repository.sh rpm-repository
