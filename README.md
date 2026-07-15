@@ -1,6 +1,10 @@
 # PrintBridge
 
-[English](./README_en.md)
+<div align="center">
+
+[English](./README_en.md) | [在线示例](https://printbridge.pages.dev/zh-CN/demo.html) | [网站](https://printbridge.pages.dev/zh-CN/)
+
+</div>
 
 PrintBridge 是一个运行在用户电脑上的本地打印代理程序。它让受信任的 Web 页面或远程业务服务器，把 PDF、图片、Office 文件和原始打印指令发送到本机打印队列，用于标签、面单、小票、报表等需要稳定静默打印的业务场景。
 

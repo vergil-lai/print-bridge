@@ -1,6 +1,10 @@
 # PrintBridge
 
-[中文](./README.md)
+<div align="center">
+
+[中文](./README.md) | [Live Demo](https://printbridge.pages.dev/demo.html) | [Website](https://printbridge.pages.dev/)
+
+</div>
 
 PrintBridge is a local print agent that runs on the user's computer. It lets trusted web pages or remote business servers send PDF files, images, Office files, and raw printer commands to the local system print queue. It is designed for labels, shipping documents, receipts, reports, and other business scenarios that need reliable silent printing.
 
@@ -75,11 +79,11 @@ The browser JSSDK uses camelCase `fileUrl` and `waitMs` and only serializes the 
 
 HTML rendering does not bundle a browser. Every platform and runtime mode requires an installed Chromium-family browser; native WebView fallbacks are not provided:
 
-| Platform | Browser renderer |
-| --- | --- |
-| Windows | Edge → Chrome → Chromium |
-| macOS | Chrome → Chromium |
-| Linux | Chrome → Chromium |
+| Platform | Browser renderer         |
+| -------- | ------------------------ |
+| Windows  | Edge → Chrome → Chromium |
+| macOS    | Chrome → Chromium        |
+| Linux    | Chrome → Chromium        |
 
 Both the GUI and the systemd-managed Linux headless product follow this requirement. Without a usable browser, an HTML task fails with renderer-unavailable (`RendererUnavailable`).
 
@@ -110,12 +114,12 @@ If your business system already generates PDF files, images, Office files, or de
 
 Download the latest version from [Releases](https://github.com/vergil-lai/print-bridge/releases).
 
-| Product | Platform | Architecture | Package |
-| --- | --- | --- | --- |
-| Desktop | Windows | x86_64 | NSIS `.exe`, WiX `.msi` |
-| Desktop | macOS | Intel, Apple Silicon | Architecture-specific macOS installer |
-| Desktop | Linux | x86_64, ARM64 | `.deb`, `.rpm`, `.AppImage` |
-| Headless | Linux | x86_64, ARM64 | `.deb`, `.rpm` |
+| Product  | Platform | Architecture         | Package                               |
+| -------- | -------- | -------------------- | ------------------------------------- |
+| Desktop  | Windows  | x86_64               | NSIS `.exe`, WiX `.msi`               |
+| Desktop  | macOS    | Intel, Apple Silicon | Architecture-specific macOS installer |
+| Desktop  | Linux    | x86_64, ARM64        | `.deb`, `.rpm`, `.AppImage`           |
+| Headless | Linux    | x86_64, ARM64        | `.deb`, `.rpm`                        |
 
 Desktop and Headless both install the `print-bridge` command, but they are mutually exclusive products and cannot be installed on the same machine. Linux Headless is intended for servers without a desktop, Raspberry Pi devices, industrial computers, and dedicated print hosts. Installing its deb/rpm creates the `printbridge` system user and enables the systemd system service automatically.
 

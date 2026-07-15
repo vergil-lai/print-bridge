@@ -1,0 +1,1 @@
+A code wiki for PrintBridge. Document the architecture, Rust/Tauri backend,frontend integration, printing workflows, device discovery, IPC commands,configuration, troubleshooting, build and release process. Keep all contentgrounded in the current source code and git history. Prefer practical Chinesedocumentation for developers over generic summaries.
