@@ -54,6 +54,7 @@ mod platform {
     const MACHINE_ENVIRONMENT: &str =
         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
 
+    /// 将 Win32 错误码转换为可显示的系统错误信息。
     fn os_error(code: u32) -> String {
         io::Error::from_raw_os_error(code as i32).to_string()
     }

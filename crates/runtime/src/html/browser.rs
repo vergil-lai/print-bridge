@@ -60,7 +60,7 @@ impl BrowserKind {
     }
 }
 
-/// 可用于启动渲染器的浏览器可执行文件。
+/// 已发现的浏览器可执行文件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserExecutable {
     pub kind: BrowserKind,
@@ -162,27 +162,41 @@ impl BrowserLocator {
 
     /// 返回当前平台优先级最高且可用的浏览器。
     pub fn find(&self) -> Result<BrowserExecutable, HtmlRenderError> {
+        Ok(self
+            .available()
+            .map_err(|searched| HtmlRenderError::RendererUnavailable { searched })?
+            .into_iter()
+            .next()
+            .expect("available browser candidates must not be empty"))
+    }
+
+    fn available(&self) -> Result<Vec<BrowserExecutable>, Vec<String>> {
         let candidates = self.candidates();
         let searched = candidates
             .iter()
             .map(|(_, candidate)| candidate.display().to_string())
             .collect::<Vec<_>>();
+        let mut available_candidates = Vec::new();
         for (kind, path) in candidates {
-            // Windows 和 macOS 不再仅为查询版本启动浏览器，避免激活用户已有窗口。
-            // 后续实际的 headless 启动才是最终可用性检查。
-            let available = match self.os {
-                TargetOs::Windows | TargetOs::MacOs => self.probe.is_file(&path),
+            let is_available = match self.os {
+                // Windows 不运行 `--version`，避免激活用户已有的浏览器窗口。
+                TargetOs::Windows => self.probe.is_file(&path),
+                TargetOs::MacOs => self.probe.is_file(&path) && self.probe.has_version(&path),
                 TargetOs::Linux => self.probe.has_version(&path),
             };
-            if available {
-                return Ok(BrowserExecutable {
+            if is_available {
+                available_candidates.push(BrowserExecutable {
                     kind,
                     path,
                     label: kind.label(),
                 });
             }
         }
-        Err(HtmlRenderError::RendererUnavailable { searched })
+        if available_candidates.is_empty() {
+            Err(searched)
+        } else {
+            Ok(available_candidates)
+        }
     }
 
     fn candidates(&self) -> Vec<(BrowserKind, PathBuf)> {
@@ -382,6 +396,59 @@ struct InstalledBrowserDriver {
     locator: BrowserLocator,
 }
 
+/// 依次启动已发现的浏览器，直到一个浏览器可用于 headless 渲染。
+fn launch_first_available<T>(
+    candidates: Vec<BrowserExecutable>,
+    mut launch: impl FnMut(&BrowserExecutable) -> Result<T, String>,
+) -> Result<(T, BrowserExecutable), HtmlRenderError> {
+    let mut failures = Vec::new();
+    for executable in candidates {
+        match launch(&executable) {
+            Ok(browser) => return Ok((browser, executable)),
+            Err(error) => failures.push(format!("{}: {error}", executable.path.display())),
+        }
+    }
+    Err(HtmlRenderError::RendererUnavailable { searched: failures })
+}
+
+fn launch_headless_browser(
+    locator: &BrowserLocator,
+    profile_path: &Path,
+    proxy_server: Option<&str>,
+    idle_browser_timeout: Duration,
+) -> Result<(Browser, BrowserExecutable), HtmlRenderError> {
+    let candidates = locator
+        .available()
+        .map_err(|searched| HtmlRenderError::RendererUnavailable { searched })?;
+    let proxy_server = proxy_server.map(str::to_owned);
+    launch_first_available(candidates, |executable| {
+        let options = LaunchOptionsBuilder::default()
+            .path(Some(executable.path.clone()))
+            .user_data_dir(Some(profile_path.to_path_buf()))
+            .proxy_server(proxy_server.as_deref())
+            .args(vec![std::ffi::OsStr::new(FORCE_LOOPBACK_THROUGH_PROXY)])
+            .ignore_certificate_errors(false)
+            .headless(true)
+            .sandbox(true)
+            .idle_browser_timeout(idle_browser_timeout)
+            .build()
+            .map_err(|error| error.to_string())?;
+        Browser::new(options).map_err(|error| error.to_string())
+    })
+}
+
+/// 检查是否有已安装的浏览器可以以 headless 模式启动。
+pub fn check_browser_launch() -> Result<BrowserExecutable, HtmlRenderError> {
+    let profile = tempfile::tempdir()?;
+    let (_, executable) = launch_headless_browser(
+        &BrowserLocator::new(),
+        profile.path(),
+        None,
+        MAX_CDP_OPERATION_TIMEOUT,
+    )?;
+    Ok(executable)
+}
+
 impl InstalledBrowserDriver {
     fn new() -> Self {
         Self {
@@ -396,24 +463,14 @@ impl BrowserDriver for InstalledBrowserDriver {
         request: BrowserDriverRequest,
         control: BrowserRenderControl,
     ) -> Result<(), HtmlRenderError> {
-        let executable = self.locator.find()?;
         let cdp_operation_timeout = control.before_cdp_operations(1)?;
         let proxy_server = chrome_proxy_server(&request.proxy_url);
-        let options = LaunchOptionsBuilder::default()
-            .path(Some(executable.path.clone()))
-            .user_data_dir(Some(request.profile_path.clone()))
-            .proxy_server(Some(&proxy_server))
-            .args(vec![std::ffi::OsStr::new(FORCE_LOOPBACK_THROUGH_PROXY)])
-            .ignore_certificate_errors(false)
-            .headless(true)
-            .sandbox(true)
-            .idle_browser_timeout(cdp_operation_timeout)
-            .build()
-            .map_err(HtmlRenderError::browser_options)?;
-        let browser =
-            Browser::new(options).map_err(|error| HtmlRenderError::RendererUnavailable {
-                searched: vec![executable.path.display().to_string(), error.to_string()],
-            })?;
+        let (browser, _) = launch_headless_browser(
+            &self.locator,
+            &request.profile_path,
+            Some(&proxy_server),
+            cdp_operation_timeout,
+        )?;
         control.before_cdp_operations(1)?;
         let new_tab_wait_timeout = control.remaining()?.saturating_sub(cdp_operation_timeout);
         browser.set_default_timeout(new_tab_wait_timeout);
@@ -545,12 +602,6 @@ impl HtmlRenderer for BrowserHtmlRenderer {
 }
 
 impl HtmlRenderError {
-    fn browser_options(error: impl std::fmt::Display) -> Self {
-        Self::Navigation {
-            message: format!("browser launch options are invalid: {error}"),
-        }
-    }
-
     fn navigation(error: impl std::fmt::Display) -> Self {
         Self::Navigation {
             message: error.to_string(),
@@ -567,8 +618,8 @@ impl HtmlRenderError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserDriver, BrowserDriverRequest, BrowserHtmlRenderer, BrowserKind, BrowserLocator,
-        BrowserProbe, TargetOs,
+        BrowserDriver, BrowserDriverRequest, BrowserExecutable, BrowserHtmlRenderer, BrowserKind,
+        BrowserLocator, BrowserProbe, TargetOs,
     };
     use crate::{
         html::{resource_policy::ResourcePolicy, HtmlRenderRequest, HtmlRenderer, HtmlSource},
@@ -592,6 +643,7 @@ mod tests {
     struct FakeProbe {
         files: Vec<PathBuf>,
         commands: HashMap<String, PathBuf>,
+        version_paths: Option<Vec<PathBuf>>,
     }
 
     impl BrowserProbe for FakeProbe {
@@ -603,8 +655,11 @@ mod tests {
             self.commands.get(command).cloned()
         }
 
-        fn has_version(&self, _path: &Path) -> bool {
-            true
+        fn has_version(&self, path: &Path) -> bool {
+            self.version_paths
+                .as_ref()
+                .map(|paths| paths.iter().any(|candidate| candidate == path))
+                .unwrap_or(true)
         }
     }
 
@@ -664,6 +719,50 @@ mod tests {
             fake_path_probe(["google-chrome-stable", "chromium"]),
         );
         assert_eq!(linux.find().unwrap().kind, BrowserKind::Chrome);
+    }
+
+    #[test]
+    fn macos_skips_browsers_that_fail_the_version_probe() {
+        let chrome = PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+        let chromium = PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium");
+        let locator = BrowserLocator::for_test(
+            TargetOs::MacOs,
+            Arc::new(FakeProbe {
+                files: vec![chrome, chromium.clone()],
+                version_paths: Some(vec![chromium]),
+                ..Default::default()
+            }),
+        );
+
+        assert_eq!(locator.find().unwrap().kind, BrowserKind::Chromium);
+    }
+
+    #[test]
+    fn browser_launch_falls_back_to_the_next_available_candidate() {
+        let edge = BrowserExecutable {
+            kind: BrowserKind::Edge,
+            path: PathBuf::from("C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"),
+            label: "edge",
+        };
+        let chrome = BrowserExecutable {
+            kind: BrowserKind::Chrome,
+            path: PathBuf::from("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"),
+            label: "chrome",
+        };
+        let mut attempted = Vec::new();
+
+        let (_, executable) = super::launch_first_available(vec![edge, chrome], |candidate| {
+            attempted.push(candidate.kind);
+            if candidate.kind == BrowserKind::Edge {
+                Err("blocked by policy".to_owned())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+
+        assert_eq!(attempted, vec![BrowserKind::Edge, BrowserKind::Chrome]);
+        assert_eq!(executable.kind, BrowserKind::Chrome);
     }
 
     #[test]
