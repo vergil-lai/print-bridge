@@ -79,6 +79,7 @@ jobs:
       - name: Test repository scripts
         run: >-
           node --test
+          scripts/apt-repository.test.mjs
           scripts/patch-updater-json.test.mjs
           scripts/prepare-windows-cli.test.mjs
           scripts/release-version.test.mjs
