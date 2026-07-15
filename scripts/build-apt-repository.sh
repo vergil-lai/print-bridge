@@ -49,8 +49,8 @@ require_package() {
   exit 1
 }
 
-require_package "print-bridge-desktop" "amd64"
-require_package "print-bridge-desktop" "arm64"
+require_package "print-bridge" "amd64"
+require_package "print-bridge" "arm64"
 require_package "print-bridge-server" "amd64"
 require_package "print-bridge-server" "arm64"
 

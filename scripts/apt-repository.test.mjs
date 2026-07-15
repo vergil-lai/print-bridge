@@ -18,7 +18,7 @@ test('APT workflow supports initial publication and later stable releases', () =
 test('APT repository build validates the full product and architecture matrix', () => {
   const script = readFileSync('scripts/build-apt-repository.sh', 'utf8');
 
-  for (const packageName of ['print-bridge-desktop', 'print-bridge-server']) {
+  for (const packageName of ['print-bridge', 'print-bridge-server']) {
     for (const architecture of ['amd64', 'arm64']) {
       assert.ok(script.includes(`require_package "${packageName}" "${architecture}"`));
     }
