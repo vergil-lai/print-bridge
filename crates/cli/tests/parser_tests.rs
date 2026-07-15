@@ -79,6 +79,25 @@ fn interaction() -> Arc<dyn CliInteraction> {
     Arc::new(TestInteraction)
 }
 
+#[tokio::test]
+async fn version_flags_show_the_workspace_version() {
+    for flag in ["--version", "-V"] {
+        let executor: Arc<dyn CommandExecutor> =
+            Arc::new(Recorder(Arc::new(Mutex::new(Vec::new()))));
+        let service = Arc::new(CommandService::new(None, executor));
+
+        let output = run_cli_from(["print-bridge", flag], service, product(), interaction())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(
+            output.stdout,
+            concat!("print-bridge ", env!("CARGO_PKG_VERSION"), "\n")
+        );
+    }
+}
+
 struct ConfigExecutor(Arc<Mutex<AgentConfig>>);
 
 #[async_trait]

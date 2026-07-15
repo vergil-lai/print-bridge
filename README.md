@@ -121,6 +121,97 @@ PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https:
 | Desktop  | Linux   | x86_64、ARM64        | `.deb`、`.rpm`、`.AppImage` |
 | Headless | Linux   | x86_64、ARM64        | `.deb`、`.rpm`              |
 
+### Homebrew（macOS）
+
+```bash
+brew tap vergil-lai/tap
+brew install --cask printbridge
+```
+
+### APT（Debian/Ubuntu）
+
+首次安装时添加 PrintBridge 软件源和签名公钥：
+
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+
+curl -fsSL \
+  https://printbridge.pages.dev/apt/printbridge-archive-keyring.gpg \
+  | sudo tee /etc/apt/keyrings/printbridge.gpg >/dev/null
+
+sudo tee /etc/apt/sources.list.d/printbridge.sources >/dev/null <<'EOF'
+Types: deb
+URIs: https://printbridge.pages.dev/apt
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/printbridge.gpg
+EOF
+
+sudo apt update
+```
+
+安装桌面版：
+
+```bash
+sudo apt install print-bridge
+```
+
+无桌面环境请选择 Headless 服务端版本：
+
+```bash
+sudo apt install print-bridge-server
+```
+
+仓库签名公钥指纹为 `7D9F6986BAD473CE95B1FDA55B1B363C885CD16D`。
+
+### RPM/DNF（Fedora/RHEL/Rocky Linux/AlmaLinux）
+
+首次安装时添加 PrintBridge 软件源：
+
+```bash
+curl -fsSL https://printbridge.pages.dev/rpm/printbridge.repo \
+  | sudo tee /etc/yum.repos.d/printbridge.repo >/dev/null
+
+sudo dnf makecache
+```
+
+安装桌面版：
+
+```bash
+sudo dnf install print-bridge
+```
+
+无桌面环境请选择 Headless 服务端版本：
+
+```bash
+sudo dnf install print-bridge-server
+```
+
+首次刷新仓库时，DNF 会要求确认导入 PrintBridge GPG 公钥。公钥指纹同样为 `7D9F6986BAD473CE95B1FDA55B1B363C885CD16D`。
+
+### 更新
+
+通过 Homebrew 安装时：
+
+```bash
+brew upgrade --cask printbridge
+```
+
+通过 APT 仓库安装时，PrintBridge 会随系统软件包一起更新：
+
+```bash
+sudo apt update
+sudo apt upgrade
+```
+
+通过 RPM 仓库安装时：
+
+```bash
+sudo dnf upgrade --refresh
+```
+
+通过 Releases 安装的 Desktop 版本可使用设置页中的内置更新功能。PrintBridge 不提供单独的 `print-bridge update` 命令。
+
 Desktop 和 Headless 都安装同名的 `print-bridge` 命令，但属于互斥产品，不能在同一台机器上同时安装。Linux Headless 适合无桌面的服务器、树莓派、工控机和专用打印主机；安装 deb/rpm 后会自动创建 `printbridge` 系统用户并启用 systemd system service。
 
 Desktop 的“设置”页会显示命令行工具状态：macOS 可授权创建 `/usr/local/bin/print-bridge`；Windows 可把包含独立 console CLI 的安装目录加入当前用户 `PATH`，操作后需要重新打开终端；Linux deb/rpm 已自动提供 `/usr/bin/print-bridge`，因此不显示管理按钮；AppImage 可创建 `~/.local/bin/print-bridge` 用户级链接，如果该目录不在 `PATH` 中，需由用户自行加入。

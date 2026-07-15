@@ -10,7 +10,7 @@ use clap::CommandFactory;
 use parser::{ServerArgs, ServerCommand};
 use print_bridge_cli::{
     client::LocalClientExecutor,
-    parser::{run_cli_from, CliArgs},
+    parser::{cli_display_output_from, run_cli_from, CliArgs},
     CommandExecutor, CommandService, TerminalInteraction, UnsupportedProductCommandAdapter,
 };
 use print_bridge_runtime::{ipc, RuntimeBuilder, RuntimeCommandExecutor};
@@ -20,6 +20,10 @@ async fn main() {
     let argv = std::env::args_os().collect::<Vec<_>>();
     if argv.len() == 1 {
         print!("{}", CliArgs::command().render_long_help());
+        return;
+    }
+    if let Some(output) = cli_display_output_from(argv.clone()) {
+        print!("{}", output.stdout);
         return;
     }
     let result = if argv.get(1).and_then(|arg| arg.to_str()) == Some("serve") {

@@ -13,7 +13,7 @@ use crate::{
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "print-bridge", about = "PrintBridge CLI")]
+#[command(name = "print-bridge", about = "PrintBridge CLI", version)]
 pub struct CliArgs {
     #[command(subcommand)]
     command: Option<CliCommand>,
@@ -234,6 +234,29 @@ pub struct CliOutput {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
+}
+
+/// 在初始化运行时之前处理 Clap 的帮助和版本输出。
+pub fn cli_display_output_from<I, T>(args: I) -> Option<CliOutput>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    match CliArgs::try_parse_from(args) {
+        Err(error)
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            Some(CliOutput {
+                stdout: error.to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// 解析并通过共享 CommandService 执行功能 CLI。
