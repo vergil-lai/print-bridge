@@ -25,10 +25,20 @@ fn is_cli_command(command: Option<&str>) -> bool {
 #[cfg(not(target_os = "windows"))]
 fn should_run_cli(program: Option<&str>, command: Option<&str>) -> bool {
     is_cli_command(command)
-        || program
+        || (program
             .and_then(|value| std::path::Path::new(value).file_name())
             .and_then(|value| value.to_str())
             == Some("print-bridge")
+            && !is_macos_app_bundle_executable(program))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_macos_app_bundle_executable(program: Option<&str>) -> bool {
+    program.is_some_and(|value| {
+        std::path::Path::new(value)
+            .ancestors()
+            .any(|path| path.extension().is_some_and(|extension| extension == "app"))
+    })
 }
 
 #[cfg(all(test, not(target_os = "windows")))]
@@ -48,5 +58,13 @@ mod tests {
     #[test]
     fn print_bridge_command_without_arguments_is_routed_to_cli_help() {
         assert!(should_run_cli(Some("/usr/local/bin/print-bridge"), None));
+    }
+
+    #[test]
+    fn macos_app_without_arguments_is_routed_to_gui() {
+        assert!(!should_run_cli(
+            Some("/Applications/PrintBridge.app/Contents/MacOS/print-bridge"),
+            None
+        ));
     }
 }
