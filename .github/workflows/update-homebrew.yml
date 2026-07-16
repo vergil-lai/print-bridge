@@ -103,41 +103,14 @@ jobs:
           brew trust --cask "${TAP_NAME}/printbridge"
           brew audit --cask --strict "${TAP_NAME}/printbridge"
 
-      - name: Push update branch
+      - name: Push Homebrew cask update
         if: steps.changes.outputs.changed == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
-          BRANCH="automation/printbridge-${VERSION}"
-
           git -C tap config user.name "github-actions[bot]"
           git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C tap fetch origin "$BRANCH:refs/remotes/origin/$BRANCH" || true
-          git -C tap checkout -B "$BRANCH"
           git -C tap add Casks/printbridge.rb
           git -C tap commit -m "chore: update PrintBridge to ${VERSION}"
-          git -C tap push --force-with-lease origin "$BRANCH"
-
-      - name: Create pull request
-        if: steps.changes.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.release.outputs.version }}
-        shell: bash
-        working-directory: tap
-        run: |
-          BRANCH="automation/printbridge-${VERSION}"
-          EXISTING_PR="$(gh pr list --repo "$TAP_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number')"
-
-          if [ -n "$EXISTING_PR" ]; then
-            echo "Pull request #${EXISTING_PR} already exists."
-            exit 0
-          fi
-
-          gh pr create \
-            --repo "$TAP_REPOSITORY" \
-            --base main \
-            --head "$BRANCH" \
-            --title "chore: update PrintBridge to ${VERSION}" \
-            --body "Automated Homebrew Cask update for PrintBridge ${VERSION}."
+          git -C tap push origin HEAD:main

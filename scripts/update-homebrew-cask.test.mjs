@@ -92,5 +92,7 @@ test('Homebrew workflow updates the tap only after a stable release is published
   assert.match(workflow, /brew trust --cask "\$\{TAP_NAME\}\/printbridge"/);
   assert.match(workflow, /brew audit --cask --strict "\$\{TAP_NAME\}\/printbridge"/);
   assert.doesNotMatch(workflow, /brew audit --cask --strict tap\/Casks\/printbridge\.rb/);
-  assert.match(workflow, /gh pr create/);
+  assert.match(workflow, /git -C tap push origin HEAD:main/);
+  assert.doesNotMatch(workflow, /automation\/printbridge-/);
+  assert.doesNotMatch(workflow, /gh pr (?:list|create)/);
 });
