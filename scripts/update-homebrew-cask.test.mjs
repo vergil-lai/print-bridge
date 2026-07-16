@@ -14,7 +14,8 @@ const cask = `cask "printbridge" do
   sha256 arm:   "old-arm-sha",
          intel: "old-intel-sha"
 
-  url "https://example.com/PrintBridge_#{version}_#{arch}.dmg"
+  url "https://github.com/vergil-lai/print-bridge/PrintBridge_#{version}_#{arch}.dmg",
+      verified: "github.com/vergil-lai/print-bridge/"
 end
 `;
 
@@ -27,6 +28,7 @@ test('updates the version and both architecture checksums', () => {
 
   assert.match(result, /version "0\.2\.0"/);
   assert.match(result, /sha256 arm:\s+"new-arm-sha",\n\s+intel: "new-intel-sha"/);
+  assert.match(result, /verified: "github\.com\/vergil-lai\/print-bridge\/"/);
   assert.doesNotMatch(result, /old-(arm|intel)-sha/);
 });
 
@@ -75,8 +77,20 @@ test('Homebrew workflow updates the tap only after a stable release is published
   const workflow = readFileSync('.github/workflows/update-homebrew.yml', 'utf8');
 
   assert.match(workflow, /release:\n\s+types:\n\s+- published/);
-  assert.match(workflow, /if: \$\{\{ !github\.event\.release\.prerelease \}\}/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /tag:\n\s+description: GitHub release tag/);
+  assert.match(
+    workflow,
+    /if: \$\{\{ github\.event_name == 'workflow_dispatch' \|\| !github\.event\.release\.prerelease \}\}/,
+  );
   assert.match(workflow, /secrets\.HOMEBREW_TAP_TOKEN/);
   assert.match(workflow, /update-homebrew-cask\.mjs/);
+  assert.match(workflow, /brew style --fix Casks\/printbridge\.rb/);
+  assert.match(workflow, /brew tap "\$\{TAP_NAME\}"/);
+  assert.match(workflow, /TAP_PATH="\$\(brew --repo "\$\{TAP_NAME\}"\)"/);
+  assert.match(workflow, /cp Casks\/printbridge\.rb "\$\{TAP_PATH\}\/Casks\/printbridge\.rb"/);
+  assert.match(workflow, /brew trust --cask "\$\{TAP_NAME\}\/printbridge"/);
+  assert.match(workflow, /brew audit --cask --strict "\$\{TAP_NAME\}\/printbridge"/);
+  assert.doesNotMatch(workflow, /brew audit --cask --strict tap\/Casks\/printbridge\.rb/);
   assert.match(workflow, /gh pr create/);
 });

@@ -4,16 +4,23 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   update-cask:
-    if: ${{ !github.event.release.prerelease }}
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
     runs-on: macos-latest
     env:
       TAP_REPOSITORY: vergil-lai/homebrew-tap
+      TAP_NAME: vergil-lai/tap
 
     steps:
       - name: Checkout PrintBridge
@@ -31,7 +38,8 @@ jobs:
       - name: Read release version
         id: release
         env:
-          TAG_NAME: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
         shell: bash
         run: |
           if [[ ! "$TAG_NAME" =~ ^printbridge-v([0-9A-Za-z.+-]+)$ ]]; then
@@ -39,12 +47,21 @@ jobs:
             exit 1
           fi
 
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            IS_PRERELEASE="$(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')"
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              echo "Refusing to update Homebrew for prerelease $TAG_NAME." >&2
+              exit 1
+            fi
+          fi
+
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
 
       - name: Download macOS release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.event.release.tag_name }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
         shell: bash
         run: |
           mkdir release-assets
@@ -60,6 +77,10 @@ jobs:
           --assets-dir release-assets
           --cask tap/Casks/printbridge.rb
 
+      - name: Format Homebrew cask
+        working-directory: tap
+        run: brew style --fix Casks/printbridge.rb
+
       - name: Check whether the cask changed
         id: changes
         shell: bash
@@ -73,9 +94,14 @@ jobs:
 
       - name: Validate Homebrew cask
         if: steps.changes.outputs.changed == 'true'
+        working-directory: tap
         run: |
-          brew style tap/Casks/printbridge.rb
-          brew audit --cask --strict tap/Casks/printbridge.rb
+          brew style Casks/printbridge.rb
+          brew tap "${TAP_NAME}"
+          TAP_PATH="$(brew --repo "${TAP_NAME}")"
+          cp Casks/printbridge.rb "${TAP_PATH}/Casks/printbridge.rb"
+          brew trust --cask "${TAP_NAME}/printbridge"
+          brew audit --cask --strict "${TAP_NAME}/printbridge"
 
       - name: Push update branch
         if: steps.changes.outputs.changed == 'true'
