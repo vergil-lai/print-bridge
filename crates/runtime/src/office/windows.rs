@@ -3,10 +3,13 @@ use super::{
     OfficeFormat, OFFICE_CONVERSION_TIMEOUT,
 };
 use std::{
+    ffi::OsStr,
     path::{Path, PathBuf},
     process::Output,
 };
 use tokio::process::Command;
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const POWERSHELL_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -199,7 +202,7 @@ fn build_command(
     output_path: &Path,
     record_path: &Path,
 ) -> Command {
-    let mut command = Command::new("powershell.exe");
+    let mut command = hidden_command("powershell.exe");
     command.args([
         "-NoProfile",
         "-NonInteractive",
@@ -219,7 +222,7 @@ fn build_command(
 
 /// 构造仅清理已记录 Office 实例的非交互 PowerShell 命令。
 fn build_cleanup_command(record_path: &Path) -> Command {
-    let mut command = Command::new("powershell.exe");
+    let mut command = hidden_command("powershell.exe");
     command.args([
         "-NoProfile",
         "-NonInteractive",
@@ -227,6 +230,13 @@ fn build_cleanup_command(record_path: &Path) -> Command {
         TIMEOUT_CLEANUP_SCRIPT,
     ]);
     command.env("PRINTBRIDGE_OFFICE_INSTANCE_RECORD", record_path);
+    command
+}
+
+/// 创建不打开独立控制台窗口的 Windows 子进程。
+fn hidden_command(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
     command
 }
 

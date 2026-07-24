@@ -6,7 +6,7 @@ use super::{
 use serde::Deserialize;
 use std::{
     ffi::OsStr,
-    os::windows::ffi::OsStrExt,
+    os::windows::{ffi::OsStrExt, process::CommandExt},
     path::{Path, PathBuf},
     process::Command,
     ptr,
@@ -15,6 +15,8 @@ use windows_sys::Win32::Graphics::Printing::{
     ClosePrinter, EndDocPrinter, EndPagePrinter, OpenPrinterW, StartDocPrinterW, StartPagePrinter,
     WritePrinter, DOC_INFO_1W, PRINTER_HANDLE,
 };
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Windows 打印后端：用 PowerShell 发现打印机，用 SumatraPDF 执行打印。
 #[derive(Debug, Clone)]
@@ -43,7 +45,7 @@ impl WindowsPrintBackend {
 impl PrintBackend for WindowsPrintBackend {
     /// 通过 PowerShell JSON 输出列出 Windows 打印机。
     fn list_printers(&self) -> PrintResult<Vec<PrinterInfo>> {
-        let output = Command::new("powershell")
+        let output = hidden_command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -74,7 +76,7 @@ impl PrintBackend for WindowsPrintBackend {
         let paper = resolve_print_paper(self, options)?;
 
         let settings = sumatra_print_settings(options.copies, &paper);
-        let output = Command::new(&self.sumatra_path)
+        let output = hidden_command(&self.sumatra_path)
             .arg("-silent")
             .arg("-print-to")
             .arg(&options.printer_name)
@@ -337,6 +339,13 @@ fn ensure_printer_exists(backend: &WindowsPrintBackend, printer_name: &str) -> P
     } else {
         Err(PrintError::PrinterNotFound(printer_name.to_string()))
     }
+}
+
+/// 创建不打开独立控制台窗口的 Windows 子进程。
+fn hidden_command(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 /// 根据后端可用纸张列表解析请求纸张。
