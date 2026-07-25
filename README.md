@@ -33,7 +33,13 @@ PrintBridge 是一个运行在用户电脑上的本地打印代理程序。它�
 - CLI 运维模式，可在不打开 GUI 时查看和修改本机配置
 - 打印机枚举、纸张枚举、配置持久化和最近任务日志
 - 配置可加密导出和导入，便于批量部署工位
-- Desktop 支持 Tauri 在线更新；Headless 后续通过 APT/RPM 软件仓库更新
+- Desktop 支持 Tauri 在线更新；Headless 支持通过 APT/RPM 软件仓库更新
+
+## 和传统 Web 打印控件的区别
+
+PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https://www.lodop.ne) 更擅长打印设计、套打、表格、条码和页面内容打印；PrintBridge 更关注开源本地打印代理、远程任务轮询、原始打印指令（Raw Commands）、CLI 运维和可私有化集成。
+
+如果业务系统已经生成好 PDF、图片、Office 文件或 ESC/POS、TSPL、ZPL、EPL、PCL 等设备指令，PrintBridge 会更像一个稳定、可审计、可改造的本机打印桥接层。
 
 ## 远程任务轮询
 
@@ -86,12 +92,6 @@ HTML 渲染不内置浏览器，所有平台和运行模式都必须使用已安
 | Linux   | Chrome → Chromium        |
 
 GUI 和 systemd 托管的 Linux headless 产品都遵循此要求；没有可用浏览器时，HTML 任务会以 renderer-unavailable（`RendererUnavailable`）失败。
-
-## 和传统 Web 打印控件的区别
-
-PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https://www.lodop.ne) 更擅长打印设计、套打、表格、条码和页面内容打印；PrintBridge 更关注开源本地打印代理、远程任务轮询、原始打印指令（Raw Commands）、CLI 运维和可私有化集成。
-
-如果业务系统已经生成好 PDF、图片、Office 文件或 ESC/POS、TSPL、ZPL、EPL、PCL 等设备指令，PrintBridge 会更像一个稳定、可审计、可改造的本机打印桥接层。
 
 ## 桌面版截图
 
@@ -197,11 +197,16 @@ sudo dnf install print-bridge-server
 brew upgrade --cask printbridge
 ```
 
-通过 APT 仓库安装时，PrintBridge 会随系统软件包一起更新：
+通过 APT 仓库安装时，先刷新软件包索引，再根据已安装的版本选择一条升级命令：
 
 ```bash
 sudo apt update
-sudo apt upgrade
+
+# Desktop
+sudo apt install --only-upgrade print-bridge
+
+# Headless
+sudo apt install --only-upgrade print-bridge-server
 ```
 
 通过 RPM 仓库安装时：

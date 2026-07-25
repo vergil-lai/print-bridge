@@ -33,7 +33,13 @@ PrintBridge does not replace printer drivers and does not bypass the operating s
 - CLI operations mode for viewing and updating local configuration without opening the GUI
 - Printer discovery, paper discovery, persistent configuration, and recent task history
 - Encrypted configuration export/import for workstation rollout
-- Tauri online updates for Desktop; Headless updates will use future APT/RPM repositories
+- Tauri online updates for Desktop; Headless updates are available through APT/RPM repositories
+
+## Difference From Traditional Web Printing Controls
+
+PrintBridge is not a traditional Web printing control. Products such as [C-Lodop / Lodop](https://www.lodop.net/) are better suited for print design, form printing, tables, barcodes, and printing page content. PrintBridge focuses on being an open-source local print agent for remote task polling, raw printer commands, CLI operations, and private integration.
+
+If your business system already generates PDF files, images, Office files, or device commands such as ESC/POS, TSPL, ZPL, EPL, and PCL, PrintBridge acts as a stable, auditable, and customizable bridge to the local print queue.
 
 ## Remote Task Polling
 
@@ -86,12 +92,6 @@ HTML rendering does not bundle a browser. Every platform and runtime mode requir
 | Linux    | Chrome → Chromium        |
 
 Both the GUI and the systemd-managed Linux headless product follow this requirement. Without a usable browser, an HTML task fails with renderer-unavailable (`RendererUnavailable`).
-
-## Difference From Traditional Web Printing Controls
-
-PrintBridge is not a traditional Web printing control. Products such as [C-Lodop / Lodop](https://www.lodop.net/) are better suited for print design, form printing, tables, barcodes, and printing page content. PrintBridge focuses on being an open-source local print agent for remote task polling, raw printer commands, CLI operations, and private integration.
-
-If your business system already generates PDF files, images, Office files, or device commands such as ESC/POS, TSPL, ZPL, EPL, and PCL, PrintBridge acts as a stable, auditable, and customizable bridge to the local print queue.
 
 ## Desktop Screenshots
 
@@ -197,11 +197,16 @@ For Homebrew installations:
 brew upgrade --cask printbridge
 ```
 
-For APT repository installations, PrintBridge is updated together with other system packages:
+For APT repository installations, refresh the package index, then run the command for the installed product:
 
 ```bash
 sudo apt update
-sudo apt upgrade
+
+# Desktop
+sudo apt install --only-upgrade print-bridge
+
+# Headless
+sudo apt install --only-upgrade print-bridge-server
 ```
 
 For RPM repository installations:
