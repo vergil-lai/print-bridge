@@ -121,6 +121,14 @@ Download the latest version from [Releases](https://github.com/vergil-lai/print-
 | Desktop  | Linux    | x86_64, ARM64        | `.deb`, `.rpm`, `.AppImage`           |
 | Headless | Linux    | x86_64, ARM64        | `.deb`, `.rpm`                        |
 
+### PowerShell (Windows)
+
+Run the following command in PowerShell to download, verify, and install the latest x64 version:
+
+```powershell
+irm https://printbridge.pages.dev/install.ps1 | iex
+```
+
 ### Homebrew (macOS)
 
 ```bash

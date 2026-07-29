@@ -121,6 +121,14 @@ GUI 和 systemd 托管的 Linux headless 产品都遵循此要求；没有可用
 | Desktop  | Linux   | x86_64、ARM64        | `.deb`、`.rpm`、`.AppImage` |
 | Headless | Linux   | x86_64、ARM64        | `.deb`、`.rpm`              |
 
+### PowerShell（Windows）
+
+在 PowerShell 中运行以下命令，下载、校验并安装最新的 x64 版本：
+
+```powershell
+irm https://printbridge.pages.dev/install.ps1 | iex
+```
+
 ### Homebrew（macOS）
 
 ```bash
