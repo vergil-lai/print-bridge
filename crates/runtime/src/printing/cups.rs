@@ -194,28 +194,105 @@ fn track_cups_submission(submission: &PrintSubmission) -> PrintTrackingOutcome {
         };
     };
 
-    match Command::new("lpstat")
-        .args(["-W", "completed", "-o"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            if completed_jobs_contains_job(&String::from_utf8_lossy(&output.stdout), job_id) {
-                PrintTrackingOutcome::Completed {
-                    message: "CUPS reports the print job as completed".to_string(),
-                }
-            } else {
-                PrintTrackingOutcome::Unknown {
-                    message: "CUPS job status was no longer available".to_string(),
-                }
-            }
+    let completed_list = match Command::new("lpstat").args(["-W", "completed", "-o"]).output() {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
+        Ok(output) => {
+            return PrintTrackingOutcome::Unknown {
+                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            };
         }
-        Ok(output) => PrintTrackingOutcome::Unknown {
-            message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        },
-        Err(error) => PrintTrackingOutcome::Unknown {
-            message: error.to_string(),
-        },
+        Err(error) => {
+            return PrintTrackingOutcome::Unknown {
+                message: error.to_string(),
+            };
+        }
+    };
+
+    let active_list = Command::new("lpstat")
+        .args(["-o"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+
+    let printer_status = printer_name_from_cups_job_id(job_id).and_then(|printer| {
+        Command::new("lpstat")
+            .args(["-p", printer])
+            .output()
+            .ok()
+            .map(|output| {
+                format!(
+                    "{}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            })
+    });
+
+    resolve_cups_job_tracking(
+        job_id,
+        &completed_list,
+        &active_list,
+        printer_status.as_deref(),
+    )
+}
+
+/// Decide final CUPS tracking status from lpstat snapshots (unit-testable).
+///
+/// Star/thermal jobs often leave both completed and active lists immediately after
+/// accept. That used to surface as `unknown` + "CUPS job status was no longer
+/// available" even when the ticket printed (warocol.com#2041).
+fn resolve_cups_job_tracking(
+    job_id: &str,
+    completed_list: &str,
+    active_list: &str,
+    printer_status: Option<&str>,
+) -> PrintTrackingOutcome {
+    if completed_jobs_contains_job(completed_list, job_id) {
+        return PrintTrackingOutcome::Completed {
+            message: "CUPS reports the print job as completed".to_string(),
+        };
     }
+
+    let in_active = completed_jobs_contains_job(active_list, job_id);
+    let printer_blocked = printer_status.is_some_and(cups_printer_blocked);
+
+    if in_active && printer_blocked {
+        return PrintTrackingOutcome::Failed {
+            message: "CUPS printer is disabled or unable to send data".to_string(),
+        };
+    }
+
+    if in_active {
+        return PrintTrackingOutcome::Unknown {
+            message: "CUPS job is still in the print queue".to_string(),
+        };
+    }
+
+    // Not listed as completed and not active → purged after finish (common on
+    // raw thermals) or never retained. Treat as completed so callers do not
+    // fall back to browser print after a successful ticket.
+    PrintTrackingOutcome::Completed {
+        message: "CUPS job left the queue (treated as completed)".to_string(),
+    }
+}
+
+fn printer_name_from_cups_job_id(job_id: &str) -> Option<&str> {
+    // CUPS ids look like `STAR_TP586-190` — drop the trailing -<jobnum>.
+    let (name, num) = job_id.rsplit_once('-')?;
+    if num.chars().all(|c| c.is_ascii_digit()) && !name.is_empty() {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+fn cups_printer_blocked(status: &str) -> bool {
+    let lower = status.to_ascii_lowercase();
+    lower.contains("disabled")
+        || lower.contains("unable to send data")
+        || lower.contains("is not ready")
 }
 
 fn temp_raw_path() -> std::path::PathBuf {
@@ -641,7 +718,9 @@ mod tests {
     use super::{
         classify_port, completed_jobs_contains_job, parse_default_destination, parse_lp_job_id,
         parse_lpoptions_dpi, parse_lpoptions_media_types, parse_lpoptions_papers,
-        parse_lpoptions_trays, parse_lpstat_destinations, parse_lpstat_devices, CupsPrintBackend,
+        parse_lpoptions_trays, parse_lpstat_destinations, parse_lpstat_devices,
+        printer_name_from_cups_job_id, resolve_cups_job_tracking, CupsPrintBackend,
+        PrintTrackingOutcome,
     };
     use std::collections::HashMap;
 
@@ -761,6 +840,49 @@ Printer-2. user 1024 Mon Jul  6 00:00:00 2026
         assert!(!completed_jobs_contains_job(output, "Printer-1"));
         assert!(completed_jobs_contains_job(output, "Printer-10"));
         assert!(completed_jobs_contains_job(output, "Printer-2"));
+    }
+
+    #[test]
+    fn resolve_cups_tracking_treats_purged_job_as_completed() {
+        match resolve_cups_job_tracking("STAR_TP586-190", "", "", None) {
+            PrintTrackingOutcome::Completed { message } => {
+                assert!(message.contains("left the queue"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_cups_tracking_fails_when_job_stuck_and_printer_disabled() {
+        let active = "STAR_TP586-190 saifer 1024 Sun Aug  2 09:10:00 2026\n";
+        let status = "printer STAR_TP586 disabled since Sun Aug  2 09:05:36 2026 -\n\tUnable to send data to printer.\n";
+        match resolve_cups_job_tracking("STAR_TP586-190", "", active, Some(status)) {
+            PrintTrackingOutcome::Failed { message } => {
+                assert!(message.contains("disabled") || message.contains("unable to send"));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_cups_tracking_keeps_unknown_while_job_still_active() {
+        let active = "STAR_TP586-190 saifer 1024 Sun Aug  2 09:10:00 2026\n";
+        let status = "printer STAR_TP586 is idle.  enabled since Sun Aug  2 09:18:31 2026\n";
+        match resolve_cups_job_tracking("STAR_TP586-190", "", active, Some(status)) {
+            PrintTrackingOutcome::Unknown { message } => {
+                assert!(message.contains("still in the print queue"));
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn printer_name_from_cups_job_id_strips_trailing_number() {
+        assert_eq!(
+            printer_name_from_cups_job_id("STAR_TP586-190"),
+            Some("STAR_TP586")
+        );
+        assert_eq!(printer_name_from_cups_job_id("notrailing"), None);
     }
 
     #[test]
