@@ -15,11 +15,6 @@ node_modules/
 /apps/desktop/dist-ssr/
 *.local
 printbridge.key
-AGENTS.md
-CLAUDE.md
-large_tool_results
-.codegraph
-.worktrees
 
 # Cargo workspace build output
 /target/
