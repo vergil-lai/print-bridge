@@ -1742,7 +1742,7 @@ onBeforeUnmount(() => {
                       <TableCell class="max-w-[150px] truncate text-muted-foreground">
                         {{ entry.printer_name ?? '-' }}
                       </TableCell>
-                      <TableCell class="min-w-[180px] break-words">
+                      <TableCell class="min-w-[180px] whitespace-normal wrap-anywhere">
                         {{ entry.current_message ?? '-' }}
                       </TableCell>
                     </TableRow>
