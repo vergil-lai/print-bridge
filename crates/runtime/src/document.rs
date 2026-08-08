@@ -1,5 +1,5 @@
 use crate::protocol::EffectivePaper;
-use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb};
+use image::{DynamicImage, GenericImageView, ImageBuffer, ImageFormat, ImageReader, Rgb};
 use printpdf::{
     ops::PdfFontHandle, BuiltinFont, Color, Line, LinePoint, Mm, Op, PdfDocument, PdfPage,
     PdfSaveOptions, Point, Pt, RawImage, RawImageData, RawImageFormat, Rgb as PdfRgb, TextItem,
@@ -98,16 +98,19 @@ pub fn image_to_pdf(
     paper: &EffectivePaper,
     output_path: &Path,
 ) -> DocumentResult<()> {
-    match detect_format(image_path)? {
-        Some(DocumentFormat::Png | DocumentFormat::Jpeg) => {}
+    let image_format = match detect_format(image_path)? {
+        Some(DocumentFormat::Png) => ImageFormat::Png,
+        Some(DocumentFormat::Jpeg) => ImageFormat::Jpeg,
         _ => return Err(DocumentError::UnsupportedFormat),
-    }
+    };
 
     paper
         .validate()
         .map_err(|_| DocumentError::InvalidImageDimensions)?;
 
-    let image = image::open(image_path)?;
+    let mut image_reader = ImageReader::open(image_path)?;
+    image_reader.set_format(image_format);
+    let image = image_reader.decode()?;
     let (image_width, image_height) = image.dimensions();
     if image_width == 0 || image_height == 0 {
         return Err(DocumentError::InvalidImageDimensions);

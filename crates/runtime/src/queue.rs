@@ -750,7 +750,7 @@ mod worker_tests {
         state::AgentState,
         task_history::{TaskHistoryStatus, TaskHistoryStore},
     };
-    use image::{ImageBuffer, Rgb};
+    use image::{ImageBuffer, ImageFormat, Rgb};
     use std::{
         fs,
         io::Write,
@@ -1261,10 +1261,12 @@ mod worker_tests {
 
     #[tokio::test]
     async fn process_downloaded_job_converts_image_to_pdf_before_printing() {
-        let image_path = temp_path("worker-image-source.png");
+        let image_path = temp_path("worker-image-source.tmp");
         let _ = fs::remove_file(&image_path);
         let image = ImageBuffer::from_pixel(2, 1, Rgb([255_u8, 0, 0]));
-        image.save(&image_path).unwrap();
+        image
+            .save_with_format(&image_path, ImageFormat::Png)
+            .unwrap();
 
         let backend = MockPrintBackend::default();
         let calls = backend.calls.clone();
