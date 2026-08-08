@@ -8,10 +8,15 @@ const DEFAULT_REPOSITORY = 'vergil-lai/print-bridge';
 const TAG_PREFIX = 'printbridge-v';
 const GITHUB_ASSET_URL_PATTERN =
   /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\/assets\/(\d+)$/;
+const GITHUB_RELEASE_DOWNLOAD_URL_PATTERN =
+  /^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/([^/?#]+)(?:[?#].*)?$/;
 
 export function rewriteUpdaterAssetUrls(updaterJson, { assets }) {
   const assetUrlsById = new Map(
     assets.map((asset) => [String(asset.id), asset.browser_download_url]),
+  );
+  const assetUrlsByName = new Map(
+    assets.map((asset) => [asset.name, asset.browser_download_url]),
   );
   const nextJson = structuredClone(updaterJson);
 
@@ -19,14 +24,19 @@ export function rewriteUpdaterAssetUrls(updaterJson, { assets }) {
     if (!platform || typeof platform.url !== 'string') continue;
 
     const assetId = platform.url.match(GITHUB_ASSET_URL_PATTERN)?.[1];
-    if (!assetId) continue;
+    if (assetId) {
+      const browserDownloadUrl = assetUrlsById.get(assetId);
+      if (!browserDownloadUrl) {
+        throw new Error(`Could not find release asset ${assetId} for updater URL.`);
+      }
 
-    const browserDownloadUrl = assetUrlsById.get(assetId);
-    if (!browserDownloadUrl) {
-      throw new Error(`Could not find release asset ${assetId} for updater URL.`);
+      platform.url = browserDownloadUrl;
+      continue;
     }
 
-    platform.url = browserDownloadUrl;
+    const assetName = platform.url.match(GITHUB_RELEASE_DOWNLOAD_URL_PATTERN)?.[1];
+    const browserDownloadUrl = assetName ? assetUrlsByName.get(assetName) : undefined;
+    if (browserDownloadUrl) platform.url = browserDownloadUrl;
   }
 
   return nextJson;

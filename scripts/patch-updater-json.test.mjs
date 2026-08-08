@@ -55,6 +55,35 @@ test('rewrites GitHub API asset URLs to browser download URLs', () => {
   );
 });
 
+test('rewrites draft release download URLs to the published release asset URL', () => {
+  const result = rewriteUpdaterAssetUrls(
+    {
+      version: '0.2.4',
+      platforms: {
+        'darwin-aarch64': {
+          signature: 'sig',
+          url: 'https://github.com/vergil-lai/print-bridge/releases/download/untagged-98f3539f98525d473150/PrintBridge_0.2.4_aarch64.app.tar.gz',
+        },
+      },
+    },
+    {
+      assets: [
+        {
+          id: 506256526,
+          name: 'PrintBridge_0.2.4_aarch64.app.tar.gz',
+          browser_download_url:
+            'https://github.com/vergil-lai/print-bridge/releases/download/printbridge-v0.2.4/PrintBridge_0.2.4_aarch64.app.tar.gz',
+        },
+      ],
+    },
+  );
+
+  assert.equal(
+    result.platforms['darwin-aarch64'].url,
+    'https://github.com/vergil-lai/print-bridge/releases/download/printbridge-v0.2.4/PrintBridge_0.2.4_aarch64.app.tar.gz',
+  );
+});
+
 test('copies the GitHub release body into updater notes', () => {
   const result = rewriteUpdaterReleaseNotes(
     {
