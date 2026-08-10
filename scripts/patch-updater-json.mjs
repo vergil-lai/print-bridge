@@ -10,6 +10,8 @@ const GITHUB_ASSET_URL_PATTERN =
   /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\/assets\/(\d+)$/;
 const GITHUB_RELEASE_DOWNLOAD_URL_PATTERN =
   /^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/([^/?#]+)(?:[?#].*)?$/;
+const LATEST_JSON_DOWNLOAD_ATTEMPTS = 5;
+const LATEST_JSON_DOWNLOAD_RETRY_DELAY_MS = 3_000;
 
 export function rewriteUpdaterAssetUrls(updaterJson, { assets }) {
   const assetUrlsById = new Map(
@@ -57,23 +59,44 @@ export function findReleaseByTag(releasePages, tagName) {
   return release;
 }
 
+export async function downloadLatestJsonWithRetry(download, {
+  attempts = LATEST_JSON_DOWNLOAD_ATTEMPTS,
+  wait = defaultWait,
+} = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return download();
+    } catch (error) {
+      if (!isLatestJsonUnavailable(error) || attempt === attempts) throw error;
+
+      console.warn(
+        `latest.json is not available yet; retrying in ${LATEST_JSON_DOWNLOAD_RETRY_DELAY_MS / 1_000}s ` +
+          `(${attempt}/${attempts - 1}).`,
+      );
+      await wait(LATEST_JSON_DOWNLOAD_RETRY_DELAY_MS);
+    }
+  }
+}
+
 async function main() {
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
   const tagName = process.argv[2] || `${TAG_PREFIX}${readPackageVersion()}`;
   const tmpDirectory = mkdtempSync(join(tmpdir(), 'printbridge-updater-'));
   const latestJsonPath = join(tmpDirectory, 'latest.json');
 
-  run('gh', [
-    'release',
-    'download',
-    tagName,
-    '--repo',
-    repository,
-    '--pattern',
-    'latest.json',
-    '--output',
-    latestJsonPath,
-  ]);
+  await downloadLatestJsonWithRetry(() =>
+    run('gh', [
+      'release',
+      'download',
+      tagName,
+      '--repo',
+      repository,
+      '--pattern',
+      'latest.json',
+      '--output',
+      latestJsonPath,
+    ]),
+  );
 
   const releasePages = JSON.parse(
     run('gh', [
@@ -120,6 +143,14 @@ function run(command, commandArgs, options = {}) {
   }
 
   return result;
+}
+
+function isLatestJsonUnavailable(error) {
+  return error instanceof Error && error.message.includes('no assets match the file pattern');
+}
+
+function defaultWait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

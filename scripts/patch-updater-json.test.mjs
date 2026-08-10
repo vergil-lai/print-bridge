@@ -2,10 +2,52 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  downloadLatestJsonWithRetry,
   findReleaseByTag,
   rewriteUpdaterAssetUrls,
   rewriteUpdaterReleaseNotes,
 } from './patch-updater-json.mjs';
+
+test('retries downloading latest.json until the asset becomes available', async () => {
+  let downloads = 0;
+  const waits = [];
+
+  await downloadLatestJsonWithRetry(
+    () => {
+      downloads += 1;
+      if (downloads < 3) {
+        throw new Error('gh release download failed:\nno assets match the file pattern');
+      }
+    },
+    {
+      attempts: 3,
+      wait: async (milliseconds) => waits.push(milliseconds),
+    },
+  );
+
+  assert.equal(downloads, 3);
+  assert.deepEqual(waits, [3_000, 3_000]);
+});
+
+test('does not retry unrelated latest.json download failures', async () => {
+  let downloads = 0;
+
+  await assert.rejects(
+    downloadLatestJsonWithRetry(
+      () => {
+        downloads += 1;
+        throw new Error('gh release download failed:\nHTTP 403: Resource not accessible by integration');
+      },
+      {
+        attempts: 3,
+        wait: async () => assert.fail('unexpected retry'),
+      },
+    ),
+    /HTTP 403/,
+  );
+
+  assert.equal(downloads, 1);
+});
 
 test('finds draft releases returned by the releases list endpoint', () => {
   const release = findReleaseByTag(
