@@ -123,12 +123,21 @@ pub(crate) fn cups_media_option(paper: &PaperInfo) -> String {
     }
 }
 
-/// 格式化 SumatraPDF 打印设置，包括份数、适配模式和纸张尺寸。
+/// 格式化 SumatraPDF 打印设置，包括份数、适配模式、方向和纸张尺寸。
 #[cfg(any(test, target_os = "windows"))]
 pub(crate) fn sumatra_print_settings(copies: u16, paper: &PaperInfo) -> String {
+    let orientation = if paper.width_mm > paper.height_mm {
+        "landscape,"
+    } else if paper.width_mm < paper.height_mm {
+        "portrait,"
+    } else {
+        ""
+    };
+
     format!(
-        "{}x,fit,paper={}mm x {}mm",
+        "{}x,fit,{}paper={}mm x {}mm",
         copies.max(1),
+        orientation,
         format_mm(paper.width_mm),
         format_mm(paper.height_mm)
     )
@@ -186,7 +195,7 @@ mod tests {
     use super::{cups_media_option, resolve_paper_for_print, sumatra_print_settings, PaperInfo};
 
     #[test]
-    fn sumatra_settings_include_copies_fit_and_explicit_paper_size() {
+    fn sumatra_settings_include_landscape_for_wide_paper() {
         let paper = PaperInfo {
             id: "label_60x40".to_string(),
             name: "60 x 40 mm".to_string(),
@@ -196,7 +205,37 @@ mod tests {
 
         assert_eq!(
             sumatra_print_settings(2, &paper),
-            "2x,fit,paper=60mm x 40mm"
+            "2x,fit,landscape,paper=60mm x 40mm"
+        );
+    }
+
+    #[test]
+    fn sumatra_settings_include_portrait_for_tall_paper() {
+        let paper = PaperInfo {
+            id: "a4".to_string(),
+            name: "A4".to_string(),
+            width_mm: 210.0,
+            height_mm: 297.0,
+        };
+
+        assert_eq!(
+            sumatra_print_settings(1, &paper),
+            "1x,fit,portrait,paper=210mm x 297mm"
+        );
+    }
+
+    #[test]
+    fn sumatra_settings_omit_orientation_for_square_paper() {
+        let paper = PaperInfo {
+            id: "square_50".to_string(),
+            name: "50 x 50 mm".to_string(),
+            width_mm: 50.0,
+            height_mm: 50.0,
+        };
+
+        assert_eq!(
+            sumatra_print_settings(1, &paper),
+            "1x,fit,paper=50mm x 50mm"
         );
     }
 
@@ -240,7 +279,7 @@ mod tests {
         assert_eq!(cups_media_option(&resolved), "Custom.37x19mm");
         assert_eq!(
             sumatra_print_settings(1, &resolved),
-            "1x,fit,paper=37mm x 19mm"
+            "1x,fit,landscape,paper=37mm x 19mm"
         );
     }
 }
