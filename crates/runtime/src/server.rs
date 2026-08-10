@@ -261,10 +261,20 @@ async fn handle_client_text(state: &AgentState, text: &str) -> ClientTextOutcome
             agent_status: "ready".to_string(),
         }),
         ClientMessage::GetPrintersList { request_id } => match state.printing.list_printers() {
-            Ok(printers) => ClientTextOutcome::response(ServerMessage::PrintersList {
-                request_id,
-                printers,
-            }),
+            Ok(mut printers) => {
+                if let Some(default_printer) =
+                    state.config.read().await.printing.default_printer.clone()
+                {
+                    for printer in &mut printers {
+                        printer.is_default = printer.name == default_printer;
+                    }
+                }
+
+                ClientTextOutcome::response(ServerMessage::PrintersList {
+                    request_id,
+                    printers,
+                })
+            }
             Err(error) => {
                 ClientTextOutcome::response(print_error_response(Some(request_id), error))
             }
@@ -654,19 +664,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn websocket_get_printers_list_returns_backend_printers() {
+    async fn websocket_get_printers_list_marks_configured_default_printer() {
+        let mut config = AgentConfig::default();
+        config.printing.default_printer = Some("Zebra ZD421".to_string());
         let state = AgentState::with_printing(
-            AgentConfig::default(),
+            config,
             Box::new(ListingPrintBackend {
-                printers: vec![PrinterInfo {
-                    name: "Zebra ZD421".to_string(),
-                    is_default: true,
-                    dpi: Some(203),
-                    port: Some("usb://Zebra/ZD421".to_string()),
-                    is_local: Some(true),
-                    is_network: Some(false),
-                    is_virtual: Some(false),
-                }],
+                printers: vec![
+                    PrinterInfo {
+                        name: "Windows system default".to_string(),
+                        is_default: true,
+                        dpi: None,
+                        port: None,
+                        is_local: None,
+                        is_network: None,
+                        is_virtual: None,
+                    },
+                    PrinterInfo {
+                        name: "Zebra ZD421".to_string(),
+                        is_default: false,
+                        dpi: Some(203),
+                        port: Some("usb://Zebra/ZD421".to_string()),
+                        is_local: Some(true),
+                        is_network: Some(false),
+                        is_virtual: Some(false),
+                    },
+                ],
                 papers: vec![],
                 trays: vec![],
                 media_types: vec![],
@@ -683,15 +706,26 @@ mod tests {
             outcome.response,
             ServerMessage::PrintersList {
                 request_id: "REQ-PRINTERS".to_string(),
-                printers: vec![PrinterInfo {
-                    name: "Zebra ZD421".to_string(),
-                    is_default: true,
-                    dpi: Some(203),
-                    port: Some("usb://Zebra/ZD421".to_string()),
-                    is_local: Some(true),
-                    is_network: Some(false),
-                    is_virtual: Some(false),
-                }],
+                printers: vec![
+                    PrinterInfo {
+                        name: "Windows system default".to_string(),
+                        is_default: false,
+                        dpi: None,
+                        port: None,
+                        is_local: None,
+                        is_network: None,
+                        is_virtual: None,
+                    },
+                    PrinterInfo {
+                        name: "Zebra ZD421".to_string(),
+                        is_default: true,
+                        dpi: Some(203),
+                        port: Some("usb://Zebra/ZD421".to_string()),
+                        is_local: Some(true),
+                        is_network: Some(false),
+                        is_virtual: Some(false),
+                    },
+                ],
             }
         );
     }
