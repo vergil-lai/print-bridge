@@ -122,6 +122,7 @@ const DEFAULT_APP_CONFIG: AgentConfig['app'] = {
 };
 
 const config = ref<AgentConfig | null>(null);
+const activeTab = ref('settings');
 const printers = ref<PrinterInfo[]>([]);
 const papers = ref<PaperInfo[]>([]);
 const taskHistory = ref<TaskHistoryJob[]>([]);
@@ -142,6 +143,7 @@ const loadingTaskEvents = ref(false);
 const clearingTaskHistory = ref(false);
 const confirmingClearTaskHistory = ref(false);
 const saving = ref(false);
+const savingWhitelist = ref(false);
 const exportingConfig = ref(false);
 const importingConfig = ref(false);
 const previewingConfigImport = ref(false);
@@ -191,6 +193,10 @@ const statusLabel = computed(() => {
 });
 /** 根据当前错误状态计算状态徽标样式。 */
 const statusVariant = computed(() => (errorMessage.value ? 'destructive' : 'secondary'));
+/** 仅在需要显式提交的设置页显示保存按钮。 */
+const showsSaveButton = computed(
+  () => activeTab.value === 'settings' || activeTab.value === 'remote',
+);
 /** 更新器当前是否正在检查新版本。 */
 const checkingUpdate = computed(() => updateStatus.value === 'checking');
 /** 当前是否正在下载或安装更新。 */
@@ -780,8 +786,35 @@ async function handleClearTaskHistory(): Promise<void> {
   }
 }
 
-/** 把校验通过的浏览器 Origin 加入允许列表。 */
-function addOrigin(): void {
+/** 保存白名单，且不提交设置和远程面板中尚未确认的改动。 */
+async function persistWhitelistChanges(
+  previousSecurity: AgentConfig['security'],
+): Promise<boolean> {
+  if (!config.value) return false;
+  savingWhitelist.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+
+  try {
+    const persistedConfig = await getConfig();
+    persistedConfig.security = {
+      allowed_origins: [...config.value.security.allowed_origins],
+      allowed_ips: [...config.value.security.allowed_ips],
+    };
+    const savedConfig = normalizeConfig(await saveConfig(persistedConfig));
+    config.value.security = savedConfig.security;
+    return true;
+  } catch (error) {
+    config.value.security = previousSecurity;
+    errorMessage.value = error instanceof Error ? error.message : t('saveOrRestartFailed');
+    return false;
+  } finally {
+    savingWhitelist.value = false;
+  }
+}
+
+/** 把校验通过的浏览器 Origin 加入允许列表并立即保存。 */
+async function addOrigin(): Promise<void> {
   if (!config.value) return;
   const origin = originDraft.value.trim();
   originErrorMessage.value = '';
@@ -793,8 +826,13 @@ function addOrigin(): void {
   }
   if (config.value.security.allowed_origins.includes(origin)) return;
 
+  const previousSecurity = {
+    allowed_origins: [...config.value.security.allowed_origins],
+    allowed_ips: [...config.value.security.allowed_ips],
+  };
   config.value.security.allowed_origins.push(origin);
   originDraft.value = '';
+  if (!(await persistWhitelistChanges(previousSecurity))) originDraft.value = origin;
 }
 
 /** 校验 Origin 字符串必须只包含协议和主机。 */
@@ -809,12 +847,17 @@ function isValidOrigin(value: string): boolean {
   }
 }
 
-/** 从允许列表移除一个浏览器 Origin。 */
-function removeOrigin(origin: string): void {
+/** 从允许列表移除一个浏览器 Origin 并立即保存。 */
+async function removeOrigin(origin: string): Promise<void> {
   if (!config.value) return;
+  const previousSecurity = {
+    allowed_origins: [...config.value.security.allowed_origins],
+    allowed_ips: [...config.value.security.allowed_ips],
+  };
   config.value.security.allowed_origins = config.value.security.allowed_origins.filter(
     (item) => item !== origin,
   );
+  await persistWhitelistChanges(previousSecurity);
 }
 
 /** 规范化 IP 白名单，确保默认回环地址始终存在。 */
@@ -876,8 +919,8 @@ function isValidIpAddress(value: string): boolean {
   );
 }
 
-/** 把校验通过的 IP 或 CIDR 加入允许列表。 */
-function addAllowedIp(): void {
+/** 把校验通过的 IP 或 CIDR 加入允许列表并立即保存。 */
+async function addAllowedIp(): Promise<void> {
   if (!config.value) return;
   const entry = ipDraft.value.trim();
   ipErrorMessage.value = '';
@@ -889,22 +932,32 @@ function addAllowedIp(): void {
   }
   if (config.value.security.allowed_ips.includes(entry)) return;
 
+  const previousSecurity = {
+    allowed_origins: [...config.value.security.allowed_origins],
+    allowed_ips: [...config.value.security.allowed_ips],
+  };
   config.value.security.allowed_ips.push(entry);
   config.value.security.allowed_ips = normalizeAllowedIps(config.value.security.allowed_ips);
   ipDraft.value = '';
+  if (!(await persistWhitelistChanges(previousSecurity))) ipDraft.value = entry;
 }
 
-/** 从 IP 白名单移除一个用户添加项。 */
-function removeAllowedIp(entry: string): void {
+/** 从 IP 白名单移除一个用户添加项并立即保存。 */
+async function removeAllowedIp(entry: string): Promise<void> {
   if (!config.value) return;
   if (isFixedAllowedIp(entry)) {
     ipErrorMessage.value = t('loopbackFixed');
     return;
   }
 
+  const previousSecurity = {
+    allowed_origins: [...config.value.security.allowed_origins],
+    allowed_ips: [...config.value.security.allowed_ips],
+  };
   config.value.security.allowed_ips = normalizeAllowedIps(
     config.value.security.allowed_ips.filter((item) => item !== entry),
   );
+  await persistWhitelistChanges(previousSecurity);
 }
 
 /** 格式化 RFC3339 时间用于展示。 */
@@ -1120,7 +1173,7 @@ onBeforeUnmount(() => {
           <Badge :variant="statusVariant">
             {{ statusLabel }}
           </Badge>
-          <Button :disabled="!config || saving" @click="persistConfig">
+          <Button v-if="showsSaveButton" :disabled="!config || saving" @click="persistConfig">
             <Save class="size-4" />
             {{ saving ? t('saving') : t('save') }}
           </Button>
@@ -1188,7 +1241,7 @@ onBeforeUnmount(() => {
         </CardContent>
       </Card>
 
-      <Tabs v-else-if="config" default-value="settings">
+      <Tabs v-else-if="config" v-model="activeTab">
         <TabsList class="grid w-full grid-cols-6 md:w-[720px]">
           <TabsTrigger value="settings"> {{ t('settings') }} </TabsTrigger>
           <TabsTrigger value="remote"> {{ t('remote') }} </TabsTrigger>
@@ -1512,7 +1565,7 @@ onBeforeUnmount(() => {
                     {{ originErrorMessage }}
                   </p>
                 </div>
-                <Button type="submit"> {{ t('add') }} </Button>
+                <Button type="submit" :disabled="savingWhitelist"> {{ t('add') }} </Button>
               </form>
               <div class="grid gap-2">
                 <div
@@ -1525,6 +1578,7 @@ onBeforeUnmount(() => {
                     variant="ghost"
                     size="icon-sm"
                     :aria-label="t('deleteOrigin')"
+                    :disabled="savingWhitelist"
                     @click="removeOrigin(origin)"
                   >
                     <Trash2 class="size-4" />
@@ -1556,7 +1610,7 @@ onBeforeUnmount(() => {
                     {{ ipErrorMessage }}
                   </p>
                 </div>
-                <Button type="submit"> {{ t('add') }} </Button>
+                <Button type="submit" :disabled="savingWhitelist"> {{ t('add') }} </Button>
               </form>
               <div class="grid gap-2">
                 <div
@@ -1570,6 +1624,7 @@ onBeforeUnmount(() => {
                     variant="ghost"
                     size="icon-sm"
                     :aria-label="t('deleteIpWhitelist')"
+                    :disabled="savingWhitelist"
                     @click="removeAllowedIp(entry)"
                   >
                     <Trash2 class="size-4" />
