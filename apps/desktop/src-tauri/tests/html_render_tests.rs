@@ -38,6 +38,7 @@ fn browser_renders_css_image_font_and_javascript_fixture_to_pdf() {
         .unwrap()
         .block_on(renderer.render(HtmlRenderRequest {
             source: HtmlSource::Inline(PUBLIC_ASSETS_HTML.to_string()),
+            allowed_loopback_origin: None,
             paper: EffectivePaper {
                 width_mm: 100.0,
                 height_mm: 150.0,
@@ -81,6 +82,7 @@ fn browser_reports_a_loopback_page_resource_without_connecting_to_it() {
         .unwrap()
         .block_on(renderer.render(HtmlRenderRequest {
             source: HtmlSource::Inline(format!("<img src=\"{blocked_url}\" />")),
+            allowed_loopback_origin: None,
             paper: EffectivePaper {
                 width_mm: 100.0,
                 height_mm: 150.0,
@@ -106,7 +108,7 @@ async fn loopback_html_resource_is_rejected_before_the_server_is_reached() {
     let blocked_url = format!("http://{}/private.png", listener.local_addr().unwrap());
     let html = format!("<img src=\"{blocked_url}\" alt=\"private resource\" />");
 
-    let proxy = FilteringProxy::start(ResourcePolicy::system(), Some(html.clone()))
+    let proxy = FilteringProxy::start(ResourcePolicy::system(), Some(html.clone()), None)
         .await
         .unwrap();
     let page_url = proxy.target_url(HtmlSource::Inline(html));
