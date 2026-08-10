@@ -10,6 +10,8 @@ pub struct QueuedJob {
     pub batch_id: Option<String>,
     pub job: PrintJobInput,
     #[serde(default)]
+    pub html_local_origin: Option<String>,
+    #[serde(default)]
     pub remote: bool,
 }
 
@@ -39,6 +41,7 @@ impl QueueState {
             request_id,
             batch_id: None,
             job,
+            html_local_origin: None,
             remote: false,
         })
     }
@@ -53,6 +56,7 @@ impl QueueState {
             request_id,
             batch_id: None,
             job,
+            html_local_origin: None,
             remote: true,
         })
     }
@@ -78,6 +82,34 @@ impl QueueState {
         self.accept_batch_with_remote(request_id, batch_id, jobs, false)
     }
 
+    /// 接收来自浏览器连接的任务，并保存已验证的本机 HTML Origin。
+    pub fn accept_job_with_html_local_origin(
+        &mut self,
+        request_id: String,
+        job: PrintJobInput,
+        html_local_origin: Option<String>,
+    ) -> Result<(), QueueError> {
+        let job_html_local_origin = html_local_origin_for_job(&job, &html_local_origin);
+        self.accept_queued_job(QueuedJob {
+            request_id,
+            batch_id: None,
+            job,
+            html_local_origin: job_html_local_origin,
+            remote: false,
+        })
+    }
+
+    /// 接收来自浏览器连接的批量任务，并保存已验证的本机 HTML Origin。
+    pub fn accept_batch_with_html_local_origin(
+        &mut self,
+        request_id: String,
+        batch_id: String,
+        jobs: Vec<PrintJobInput>,
+        html_local_origin: Option<String>,
+    ) -> Result<(), QueueError> {
+        self.accept_batch_with_html_origin(request_id, batch_id, jobs, false, html_local_origin)
+    }
+
     /// 接收远程服务拉取到的整批任务。
     pub fn accept_remote_batch(
         &mut self,
@@ -94,6 +126,17 @@ impl QueueState {
         batch_id: String,
         jobs: Vec<PrintJobInput>,
         remote: bool,
+    ) -> Result<(), QueueError> {
+        self.accept_batch_with_html_origin(request_id, batch_id, jobs, remote, None)
+    }
+
+    fn accept_batch_with_html_origin(
+        &mut self,
+        request_id: String,
+        batch_id: String,
+        jobs: Vec<PrintJobInput>,
+        remote: bool,
+        html_local_origin: Option<String>,
     ) -> Result<(), QueueError> {
         for job in &jobs {
             validate_html_source(job)?;
@@ -113,10 +156,12 @@ impl QueueState {
         self.seen_batch_ids.insert(batch_id.clone());
         for job in jobs {
             self.seen_job_ids.insert(job.job_id.clone());
+            let job_html_local_origin = html_local_origin_for_job(&job, &html_local_origin);
             self.pending.push_back(QueuedJob {
                 request_id: request_id.clone(),
                 batch_id: Some(batch_id.clone()),
                 job,
+                html_local_origin: job_html_local_origin,
                 remote,
             });
         }
@@ -133,6 +178,22 @@ impl QueueState {
     pub fn pending_jobs(&self) -> Vec<QueuedJob> {
         self.pending.iter().cloned().collect()
     }
+}
+
+/// 只把已验证的本机 Origin 附加到与其完全同源的 HTML 作业。
+fn html_local_origin_for_job(
+    job: &PrintJobInput,
+    html_local_origin: &Option<String>,
+) -> Option<String> {
+    let file_url = job.file_url.as_deref()?;
+    let origin = validate_html_file_url(file_url)
+        .ok()?
+        .origin()
+        .ascii_serialization();
+    html_local_origin
+        .as_ref()
+        .filter(|allowed_origin| **allowed_origin == origin)
+        .cloned()
 }
 
 fn validate_html_source(job: &PrintJobInput) -> Result<(), QueueError> {

@@ -214,6 +214,10 @@ async fn print_html_job(
         std::env::temp_dir().join(format!("print-bridge-html-{}.pdf", Uuid::new_v4()));
     let request = HtmlRenderRequest {
         source,
+        allowed_loopback_origin: queued_job
+            .html_local_origin
+            .as_deref()
+            .and_then(|origin| url::Url::parse(origin).ok()),
         paper: queued_job.job.paper.clone().unwrap_or(EffectivePaper {
             width_mm: options.paper.width_mm,
             height_mm: options.paper.height_mm,
@@ -851,13 +855,14 @@ mod worker_tests {
             Box::new(backend),
             Arc::new(renderer),
         );
-        let queued = queued_job(job_with(
+        let mut queued = queued_job(job_with(
             "html-url-job",
             SupportedFormat::Html,
-            "https://example.com/label",
+            "http://127.0.0.1:6688/label",
             3,
             None,
         ));
+        queued.html_local_origin = Some("http://127.0.0.1:6688".to_string());
 
         process_job(&state, queued).await;
 
@@ -865,6 +870,13 @@ mod worker_tests {
             let requests = render_calls.lock().unwrap();
             assert_eq!(requests.len(), 1);
             assert!(matches!(requests[0].source, HtmlSource::Url(_)));
+            assert_eq!(
+                requests[0]
+                    .allowed_loopback_origin
+                    .as_ref()
+                    .map(url::Url::as_str),
+                Some("http://127.0.0.1:6688/")
+            );
             assert_eq!(requests[0].wait_ms, crate::protocol::DEFAULT_HTML_WAIT_MS);
             assert_eq!(requests[0].paper, default_paper());
             assert!(!requests[0].output_path.exists());
@@ -1064,6 +1076,7 @@ mod worker_tests {
                 1,
                 None,
             ),
+            html_local_origin: None,
             remote: true,
         };
 
@@ -1473,6 +1486,7 @@ mod worker_tests {
             request_id: "request-1".to_string(),
             batch_id: None,
             job,
+            html_local_origin: None,
             remote: false,
         }
     }

@@ -103,6 +103,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn policy_allows_only_the_exact_approved_loopback_origin() {
+        let policy = policy();
+        let origin = Url::parse("http://127.0.0.1:6688").unwrap();
+
+        assert!(policy
+            .resolve_target(
+                &Url::parse("http://127.0.0.1:6688/print.html").unwrap(),
+                Some(&origin),
+            )
+            .await
+            .is_ok());
+        for value in [
+            "http://127.0.0.1:6689/",
+            "http://[::1]:6688/",
+            "http://localhost:6688/",
+        ] {
+            assert!(matches!(
+                policy
+                    .resolve_target(&Url::parse(value).unwrap(), Some(&origin))
+                    .await,
+                Err(HtmlRenderError::BlockedResource { .. })
+            ));
+        }
+    }
+
+    #[tokio::test]
     async fn policy_rejects_empty_and_mixed_dns_results() {
         let policy = policy();
         for value in ["https://unknown.example.com/", "https://mixed.example.com/"] {
@@ -180,6 +206,15 @@ impl ResourcePolicy {
         &self,
         url: &Url,
     ) -> Result<ResolvedTarget, HtmlRenderError> {
+        self.resolve_target(url, None).await
+    }
+
+    /// 验证 URL 并返回已经批准的连接地址；可选地放行一个精确的本机 Origin。
+    pub async fn resolve_target(
+        &self,
+        url: &Url,
+        allowed_loopback_origin: Option<&Url>,
+    ) -> Result<ResolvedTarget, HtmlRenderError> {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(blocked(url));
         }
@@ -191,9 +226,16 @@ impl ResourcePolicy {
         }
         let port = url.port_or_known_default().ok_or_else(|| blocked(url))?;
         let authority = authority(url, host);
+        let is_allowed_loopback = allowed_loopback_origin
+            .is_some_and(|origin| origin.origin() == url.origin() && is_exact_loopback_host(host));
 
         if let Ok(address) = normalized_host.parse::<IpAddr>() {
-            return approved_target(url, authority, SocketAddr::new(address, port));
+            return approved_target(
+                url,
+                authority,
+                SocketAddr::new(address, port),
+                is_allowed_loopback,
+            );
         }
 
         let addresses = self
@@ -211,7 +253,7 @@ impl ResourcePolicy {
             return Err(blocked(url));
         }
 
-        approved_target(url, authority, address)
+        approved_target(url, authority, address, false)
     }
 }
 
@@ -231,12 +273,19 @@ fn approved_target(
     url: &Url,
     authority: String,
     address: SocketAddr,
+    is_allowed_loopback: bool,
 ) -> Result<ResolvedTarget, HtmlRenderError> {
-    if is_public_ip(address.ip()) {
+    if is_public_ip(address.ip()) || (is_allowed_loopback && address.ip().is_loopback()) {
         Ok(ResolvedTarget { authority, address })
     } else {
         Err(blocked(url))
     }
+}
+
+/// 判断主机是否是可由同源规则放行的精确 loopback 地址。
+fn is_exact_loopback_host(host: &str) -> bool {
+    matches!(host.parse::<IpAddr>(), Ok(IpAddr::V4(address)) if address.octets() == [127, 0, 0, 1])
+        || matches!(host.parse::<IpAddr>(), Ok(IpAddr::V6(address)) if address.is_loopback())
 }
 
 fn blocked(url: &Url) -> HtmlRenderError {

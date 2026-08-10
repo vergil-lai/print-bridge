@@ -106,6 +106,7 @@ impl ApprovedConnector for TcpConnector {
 
 struct ProxyState {
     policy: ResourcePolicy,
+    allowed_loopback_origin: Option<Url>,
     connector: Arc<dyn ApprovedConnector>,
     inline: Option<InlineRoute>,
     rejected_resource: RejectedResourceTracker,
@@ -131,22 +132,31 @@ impl FilteringProxy {
     pub async fn start(
         policy: ResourcePolicy,
         inline_html: Option<String>,
+        allowed_loopback_origin: Option<Url>,
     ) -> Result<Self, HtmlRenderError> {
-        Self::start_with(policy, inline_html, Arc::new(TcpConnector)).await
+        Self::start_with(
+            policy,
+            inline_html,
+            allowed_loopback_origin,
+            Arc::new(TcpConnector),
+        )
+        .await
     }
 
     #[cfg(test)]
     async fn start_with_connector(
         policy: ResourcePolicy,
         inline_html: Option<String>,
+        allowed_loopback_origin: Option<Url>,
         connector: Arc<dyn ApprovedConnector>,
     ) -> Result<Self, HtmlRenderError> {
-        Self::start_with(policy, inline_html, connector).await
+        Self::start_with(policy, inline_html, allowed_loopback_origin, connector).await
     }
 
     async fn start_with(
         policy: ResourcePolicy,
         inline_html: Option<String>,
+        allowed_loopback_origin: Option<Url>,
         connector: Arc<dyn ApprovedConnector>,
     ) -> Result<Self, HtmlRenderError> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -165,6 +175,7 @@ impl FilteringProxy {
         let rejected_resource = RejectedResourceTracker::new();
         let state = Arc::new(ProxyState {
             policy,
+            allowed_loopback_origin,
             connector,
             inline,
             rejected_resource: rejected_resource.clone(),
@@ -371,7 +382,10 @@ impl ProxyState {
                 reason: error.to_string(),
             }
         })?;
-        let target = self.policy.resolve_public_target(&url).await?;
+        let target = self
+            .policy
+            .resolve_target(&url, self.allowed_loopback_origin.as_ref())
+            .await?;
         let upstream = self.connector.connect(target.address).await?;
         tokio::spawn(async move {
             if let Ok(upgraded) = hyper::upgrade::on(request).await {
@@ -394,7 +408,10 @@ impl ProxyState {
         if url.scheme() != "http" {
             return Err(invalid_request("HTTPS resources must use CONNECT"));
         }
-        let target = self.policy.resolve_public_target(&url).await?;
+        let target = self
+            .policy
+            .resolve_target(&url, self.allowed_loopback_origin.as_ref())
+            .await?;
         let upstream = self.connector.connect(target.address).await?;
         let origin_form = match url.query() {
             Some(query) => format!("{}?{query}", url.path()),
@@ -629,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_serves_inline_html_only_on_its_one_time_route() {
-        let proxy = FilteringProxy::start(test_policy(), Some("<h1>ok</h1>".into()))
+        let proxy = FilteringProxy::start(test_policy(), Some("<h1>ok</h1>".into()), None)
             .await
             .unwrap();
         let body = reqwest::Client::builder()
@@ -649,7 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_serves_an_empty_favicon_for_the_inline_page() {
-        let proxy = FilteringProxy::start(test_policy(), Some("<h1>ok</h1>".into()))
+        let proxy = FilteringProxy::start(test_policy(), Some("<h1>ok</h1>".into()), None)
             .await
             .unwrap();
         let favicon_url = proxy.inline_url().unwrap().join("favicon.ico").unwrap();
@@ -674,7 +691,7 @@ mod tests {
         )
         .await;
         let connector = Arc::new(TestConnector::new(upstream));
-        let proxy = FilteringProxy::start_with_connector(test_policy(), None, connector)
+        let proxy = FilteringProxy::start_with_connector(test_policy(), None, None, connector)
             .await
             .unwrap();
 
@@ -706,6 +723,7 @@ mod tests {
         let proxy = FilteringProxy::start_with_connector(
             test_policy(),
             None,
+            None,
             Arc::new(TestConnector::new(upstream)),
         )
         .await
@@ -733,9 +751,10 @@ mod tests {
     #[tokio::test]
     async fn proxy_rejects_private_destinations_before_connecting() {
         let connector = Arc::new(TestConnector::new("127.0.0.1:9".parse().unwrap()));
-        let proxy = FilteringProxy::start_with_connector(test_policy(), None, connector.clone())
-            .await
-            .unwrap();
+        let proxy =
+            FilteringProxy::start_with_connector(test_policy(), None, None, connector.clone())
+                .await
+                .unwrap();
         let response = reqwest::Client::builder()
             .proxy(reqwest::Proxy::all(proxy.proxy_url().as_str()).unwrap())
             .build()
@@ -755,6 +774,7 @@ mod tests {
         let proxy = FilteringProxy::start_with_connector(
             test_policy(),
             Some("<main>page</main>".to_string()),
+            None,
             connector,
         )
         .await
@@ -781,9 +801,10 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_serves_inline_html_for_an_origin_form_proxy_request() {
-        let proxy = FilteringProxy::start(test_policy(), Some("<main>inline page</main>".into()))
-            .await
-            .unwrap();
+        let proxy =
+            FilteringProxy::start(test_policy(), Some("<main>inline page</main>".into()), None)
+                .await
+                .unwrap();
         let page_url = proxy.target_url(HtmlSource::Inline("<main>inline page</main>".into()));
         let mut stream = TcpStream::connect(proxy.proxy_url().socket_addrs(|| None).unwrap()[0])
             .await
@@ -808,9 +829,10 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_serves_inline_html_inside_an_http_connect_tunnel() {
-        let proxy = FilteringProxy::start(test_policy(), Some("<main>inline page</main>".into()))
-            .await
-            .unwrap();
+        let proxy =
+            FilteringProxy::start(test_policy(), Some("<main>inline page</main>".into()), None)
+                .await
+                .unwrap();
         let page_url = proxy.target_url(HtmlSource::Inline("<main>inline page</main>".into()));
         let mut stream = TcpStream::connect(proxy.proxy_url().socket_addrs(|| None).unwrap()[0])
             .await
@@ -856,6 +878,7 @@ mod tests {
         let proxy = FilteringProxy::start_with_connector(
             test_policy(),
             Some("<main>page</main>".to_string()),
+            None,
             connector,
         )
         .await
@@ -877,9 +900,10 @@ mod tests {
     #[tokio::test]
     async fn proxy_rejects_https_without_a_connect_tunnel() {
         let connector = Arc::new(TestConnector::new("127.0.0.1:9".parse().unwrap()));
-        let proxy = FilteringProxy::start_with_connector(test_policy(), None, connector.clone())
-            .await
-            .unwrap();
+        let proxy =
+            FilteringProxy::start_with_connector(test_policy(), None, None, connector.clone())
+                .await
+                .unwrap();
         let mut stream = TcpStream::connect(proxy.proxy_url().socket_addrs(|| None).unwrap()[0])
             .await
             .unwrap();
@@ -907,9 +931,10 @@ mod tests {
         )
         .await;
         let connector = Arc::new(TestConnector::new(upstream));
-        let proxy = FilteringProxy::start_with_connector(test_policy(), None, connector.clone())
-            .await
-            .unwrap();
+        let proxy =
+            FilteringProxy::start_with_connector(test_policy(), None, None, connector.clone())
+                .await
+                .unwrap();
         let response = reqwest::Client::builder()
             .proxy(reqwest::Proxy::all(proxy.proxy_url().as_str()).unwrap())
             .build()
@@ -935,6 +960,7 @@ mod tests {
         });
         let proxy = FilteringProxy::start_with_connector(
             test_policy(),
+            None,
             None,
             Arc::new(TestConnector::new(upstream)),
         )
@@ -962,7 +988,9 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_proxy_shuts_down_its_listener() {
-        let proxy = FilteringProxy::start(test_policy(), None).await.unwrap();
+        let proxy = FilteringProxy::start(test_policy(), None, None)
+            .await
+            .unwrap();
         let proxy_url = proxy.proxy_url().clone();
         let accept_loop = proxy.accept_loop.as_ref().unwrap().abort_handle();
         drop(proxy);

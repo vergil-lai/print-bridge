@@ -4,8 +4,9 @@ use crate::{
     logs::TaskLogEntry,
     printing::PrintError,
     protocol::{
-        is_allowed_origin, ClientMessage, ErrorCode, JobStatus, JobValidationError,
-        PrintQueueJobInfo, PrinterDetails, ServerMessage,
+        is_allowed_origin, validate_html_file_url, ClientMessage, ErrorCode, JobStatus,
+        JobValidationError, PrintJobInput, PrintQueueJobInfo, PrinterDetails, ServerMessage,
+        SupportedFormat,
     },
     queue::QueueError,
     state::AgentState,
@@ -104,12 +105,15 @@ async fn ws_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let origin = headers.get(ORIGIN).and_then(|value| value.to_str().ok());
-    if !is_ws_origin_allowed(&state, origin).await {
+    let origin = headers
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    if !is_ws_origin_allowed(&state, origin.as_deref()).await {
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    ws.on_upgrade(move |socket| handle_socket(state, socket))
+    ws.on_upgrade(move |socket| handle_socket(state, socket, origin))
 }
 
 /// 检查 WebSocket 请求 Origin 是否被当前配置允许。
@@ -147,7 +151,7 @@ fn client_ip_error_response() -> Response {
 }
 
 /// 处理单个 WebSocket 连接，并只转发该连接接受的任务。
-async fn handle_socket(state: AgentState, socket: WebSocket) {
+async fn handle_socket(state: AgentState, socket: WebSocket, origin: Option<String>) {
     let (mut sender, mut receiver) = socket.split();
     let mut status_events = state.subscribe_status_events();
     // 每个浏览器连接只接收自己提交任务的状态事件。
@@ -168,7 +172,7 @@ async fn handle_socket(state: AgentState, socket: WebSocket) {
                 };
 
                 let outcome = match message {
-                    Message::Text(text) => handle_client_text(&state, &text).await,
+                    Message::Text(text) => handle_client_text(&state, &text, origin.as_deref()).await,
                     Message::Ping(payload) => {
                         if sender.send(Message::Pong(payload)).await.is_err() {
                             break;
@@ -243,7 +247,11 @@ impl ClientTextOutcome {
 }
 
 /// 解析单条客户端文本帧，并返回协议响应。
-async fn handle_client_text(state: &AgentState, text: &str) -> ClientTextOutcome {
+async fn handle_client_text(
+    state: &AgentState,
+    text: &str,
+    origin: Option<&str>,
+) -> ClientTextOutcome {
     let message = match serde_json::from_str::<ClientMessage>(text) {
         Ok(message) => message,
         Err(error) => {
@@ -372,9 +380,22 @@ async fn handle_client_text(state: &AgentState, text: &str) -> ClientTextOutcome
                     error,
                 ));
             }
+            let html_local_origin = match html_local_origin(std::slice::from_ref(&job), origin) {
+                Ok(origin) => origin,
+                Err(message) => {
+                    return ClientTextOutcome::response(invalid_message_response(
+                        Some(request_id),
+                        message,
+                    ))
+                }
+            };
 
             let job_id = job.job_id.clone();
-            let result = state.queue.lock().await.accept_job(request_id.clone(), job);
+            let result = state.queue.lock().await.accept_job_with_html_local_origin(
+                request_id.clone(),
+                job,
+                html_local_origin,
+            );
             match result {
                 Ok(()) => {
                     state.queue_notify.notify_one();
@@ -415,6 +436,15 @@ async fn handle_client_text(state: &AgentState, text: &str) -> ClientTextOutcome
                     ));
                 }
             }
+            let html_local_origin = match html_local_origin(&jobs, origin) {
+                Ok(origin) => origin,
+                Err(message) => {
+                    return ClientTextOutcome::response(invalid_message_response(
+                        Some(request_id),
+                        message,
+                    ))
+                }
+            };
 
             // 保存所有已接受的任务 ID，便于后续 worker 状态广播
             // 只过滤回当前这个 WebSocket 连接。
@@ -428,7 +458,12 @@ async fn handle_client_text(state: &AgentState, text: &str) -> ClientTextOutcome
                 .queue
                 .lock()
                 .await
-                .accept_batch(request_id.clone(), batch_id, jobs);
+                .accept_batch_with_html_local_origin(
+                    request_id.clone(),
+                    batch_id,
+                    jobs,
+                    html_local_origin,
+                );
             match result {
                 Ok(()) => {
                     state.queue_notify.notify_one();
@@ -448,6 +483,46 @@ async fn handle_client_text(state: &AgentState, text: &str) -> ClientTextOutcome
             }
         }
     }
+}
+
+/// 返回可放行的本机 HTML Origin；只接受与 WebSocket 发起页完全同源的地址。
+fn html_local_origin(
+    jobs: &[PrintJobInput],
+    origin: Option<&str>,
+) -> Result<Option<String>, String> {
+    let loopback_urls = jobs
+        .iter()
+        .filter(|job| job.format == SupportedFormat::Html)
+        .filter_map(|job| job.file_url.as_deref())
+        .filter_map(|file_url| validate_html_file_url(file_url).ok())
+        .filter(is_exact_loopback_url)
+        .collect::<Vec<_>>();
+    if loopback_urls.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(origin) = origin else {
+        return Err("loopback HTML URLs require a matching loopback WebSocket Origin".to_string());
+    };
+    let origin = url::Url::parse(origin)
+        .ok()
+        .filter(is_exact_loopback_url)
+        .ok_or_else(|| {
+            "loopback HTML URLs require a matching loopback WebSocket Origin".to_string()
+        })?;
+    if loopback_urls
+        .iter()
+        .any(|file_url| file_url.origin() != origin.origin())
+    {
+        return Err("loopback HTML URL must match the WebSocket Origin exactly".to_string());
+    }
+
+    Ok(Some(origin.origin().ascii_serialization()))
+}
+
+/// 判断 URL 是否使用受支持的精确 loopback 地址。
+fn is_exact_loopback_url(url: &url::Url) -> bool {
+    matches!(url.host_str(), Some("127.0.0.1") | Some("::1"))
 }
 
 /// 把任务日志记录转换为单个连接的 WebSocket 状态消息。
@@ -480,6 +555,15 @@ fn queue_error_response(request_id: Option<String>, error: QueueError) -> Server
         request_id,
         error_code,
         message: error.to_string(),
+    }
+}
+
+/// 构造协议字段无效时的错误响应。
+fn invalid_message_response(request_id: Option<String>, message: String) -> ServerMessage {
+    ServerMessage::Error {
+        request_id,
+        error_code: ErrorCode::InvalidMessage,
+        message,
     }
 }
 
@@ -699,6 +783,7 @@ mod tests {
         let outcome = super::handle_client_text(
             &state,
             r#"{"type":"get_printers_list","request_id":"REQ-PRINTERS"}"#,
+            None,
         )
         .await;
 
@@ -764,6 +849,7 @@ mod tests {
         let outcome = super::handle_client_text(
             &state,
             r#"{"type":"get_printer_info","request_id":"REQ-INFO","printer_name":"Zebra ZD421"}"#,
+            None,
         )
         .await;
 
@@ -824,6 +910,7 @@ mod tests {
         let outcome = super::handle_client_text(
             &state,
             r#"{"type":"get_print_queue","request_id":"REQ-QUEUE"}"#,
+            None,
         )
         .await;
 
@@ -840,6 +927,75 @@ mod tests {
                 }],
             }
         );
+    }
+
+    #[tokio::test]
+    async fn websocket_allows_html_from_its_exact_loopback_origin() {
+        let state = AgentState::new(AgentConfig::default());
+        let outcome = super::handle_client_text(
+            &state,
+            r#"{"type":"print","request_id":"REQ-LOCAL","job_id":"JOB-LOCAL","format":"html","file_url":"http://127.0.0.1:6688/static/Sample.html","copies":1}"#,
+            Some("http://127.0.0.1:6688"),
+        )
+        .await;
+
+        assert!(matches!(
+            outcome.response,
+            ServerMessage::JobStatus {
+                status: JobStatus::Queued,
+                ..
+            }
+        ));
+        let queued = state.queue.lock().await.pending_jobs();
+        assert_eq!(
+            queued[0].html_local_origin.as_deref(),
+            Some("http://127.0.0.1:6688")
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_rejects_html_from_a_different_loopback_origin() {
+        let state = AgentState::new(AgentConfig::default());
+        let outcome = super::handle_client_text(
+            &state,
+            r#"{"type":"print","request_id":"REQ-LOCAL","job_id":"JOB-LOCAL","format":"html","file_url":"http://127.0.0.1:6688/static/Sample.html","copies":1}"#,
+            Some("http://127.0.0.1:5173"),
+        )
+        .await;
+
+        assert!(matches!(
+            outcome.response,
+            ServerMessage::Error {
+                error_code: ErrorCode::InvalidMessage,
+                ..
+            }
+        ));
+        assert!(state.queue.lock().await.pending_jobs().is_empty());
+    }
+
+    #[tokio::test]
+    async fn websocket_batch_does_not_grant_loopback_access_to_public_html() {
+        let state = AgentState::new(AgentConfig::default());
+        let outcome = super::handle_client_text(
+            &state,
+            r#"{"type":"print_batch","request_id":"REQ-BATCH","batch_id":"BATCH-LOCAL","jobs":[{"job_id":"JOB-LOCAL","format":"html","file_url":"http://127.0.0.1:6688/static/Sample.html","copies":1},{"job_id":"JOB-PUBLIC","format":"html","file_url":"https://example.com/Sample.html","copies":1}]}"#,
+            Some("http://127.0.0.1:6688"),
+        )
+        .await;
+
+        assert!(matches!(
+            outcome.response,
+            ServerMessage::JobStatus {
+                status: JobStatus::Queued,
+                ..
+            }
+        ));
+        let queued = state.queue.lock().await.pending_jobs();
+        assert_eq!(
+            queued[0].html_local_origin.as_deref(),
+            Some("http://127.0.0.1:6688")
+        );
+        assert_eq!(queued[1].html_local_origin, None);
     }
 
     struct ListingPrintBackend {

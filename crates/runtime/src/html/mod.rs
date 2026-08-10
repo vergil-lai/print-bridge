@@ -20,6 +20,8 @@ pub enum HtmlSource {
 #[derive(Debug, Clone)]
 pub struct HtmlRenderRequest {
     pub source: HtmlSource,
+    /// 允许访问的、与提交页面同源的本机 HTML 地址。
+    pub allowed_loopback_origin: Option<Url>,
     pub paper: EffectivePaper,
     pub wait_ms: u64,
     pub output_path: PathBuf,

@@ -647,7 +647,9 @@ impl HtmlRenderer for BrowserHtmlRenderer {
                 HtmlSource::Url(_) => None,
                 HtmlSource::Inline(html) => Some(html.clone()),
             };
-            let mut proxy = FilteringProxy::start(policy, inline_html).await?;
+            let mut proxy =
+                FilteringProxy::start(policy, inline_html, request.allowed_loopback_origin.clone())
+                    .await?;
             let target_url = proxy.target_url(request.source.clone());
             let rejected_resources = proxy.rejection_tracker();
             let profile = Arc::new(tempfile::tempdir()?);
@@ -1032,6 +1034,7 @@ mod tests {
                     source: HtmlSource::Url(
                         Url::parse("https://public.example.com/invoice").unwrap(),
                     ),
+                    allowed_loopback_origin: None,
                     paper: paper.clone(),
                     wait_ms,
                     output_path: std::env::temp_dir().join(format!("printbridge-{wait_ms}.pdf")),
@@ -1068,6 +1071,7 @@ mod tests {
         let result = renderer
             .render(HtmlRenderRequest {
                 source: HtmlSource::Inline(format!("<img src=\"{blocked_url}\" />")),
+                allowed_loopback_origin: None,
                 paper: EffectivePaper {
                     width_mm: 100.0,
                     height_mm: 150.0,
@@ -1101,6 +1105,7 @@ mod tests {
         let result = renderer
             .render(HtmlRenderRequest {
                 source: HtmlSource::Url(Url::parse("https://public.example.com/").unwrap()),
+                allowed_loopback_origin: None,
                 paper: EffectivePaper {
                     width_mm: 100.0,
                     height_mm: 150.0,
@@ -1143,6 +1148,7 @@ mod tests {
         let result = renderer
             .render(HtmlRenderRequest {
                 source: HtmlSource::Url(Url::parse("https://public.example.com/").unwrap()),
+                allowed_loopback_origin: None,
                 paper: EffectivePaper {
                     width_mm: 100.0,
                     height_mm: 150.0,
