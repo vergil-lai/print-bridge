@@ -85,7 +85,7 @@ jobs:
 
           $installerUrl = "https://github.com/vergil-lai/print-bridge/releases/download/$($env:TAG_NAME)/PrintBridge_$($env:VERSION)_x64_en-US.msi"
           & .\wingetcreate.exe update Vergil.PrintBridge `
-            --urls "$installerUrl|x64" `
+            --urls "$installerUrl|x64|machine" `
             --version $env:VERSION `
             --submit `
             --token $env:WINGET_CREATE_GITHUB_TOKEN `
