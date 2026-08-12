@@ -84,7 +84,7 @@ jobs:
           }
 
           $manifestRoot = 'manifests'
-          $manifestDirectory = Join-Path $manifestRoot "v/Vergil/PrintBridge/$($env:VERSION)"
+          $manifestDirectory = Join-Path $manifestRoot "manifests/v/Vergil/PrintBridge/$($env:VERSION)"
           $installerUrl = "https://github.com/vergil-lai/print-bridge/releases/download/$($env:TAG_NAME)/PrintBridge_$($env:VERSION)_x64_en-US.msi"
           & .\wingetcreate.exe update Vergil.PrintBridge `
             --urls "$installerUrl|x64" `
@@ -118,7 +118,7 @@ jobs:
           WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          $manifestDirectory = "manifests/v/Vergil/PrintBridge/$($env:VERSION)"
+          $manifestDirectory = "manifests/manifests/v/Vergil/PrintBridge/$($env:VERSION)"
           & .\wingetcreate.exe submit `
             $manifestDirectory `
             --prtitle "Update: Vergil.PrintBridge to $($env:VERSION)" `
