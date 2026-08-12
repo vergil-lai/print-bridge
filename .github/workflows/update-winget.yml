@@ -72,7 +72,7 @@ jobs:
             -ContentType 'application/json' `
             -Body $body
 
-      - name: Update WinGet manifest
+      - name: Generate WinGet manifest
         shell: pwsh
         env:
           WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
@@ -83,11 +83,48 @@ jobs:
             throw 'Missing WINGET_CREATE_GITHUB_TOKEN secret.'
           }
 
+          $manifestRoot = 'manifests'
+          $manifestDirectory = Join-Path $manifestRoot "v/Vergil/PrintBridge/$($env:VERSION)"
           $installerUrl = "https://github.com/vergil-lai/print-bridge/releases/download/$($env:TAG_NAME)/PrintBridge_$($env:VERSION)_x64_en-US.msi"
           & .\wingetcreate.exe update Vergil.PrintBridge `
-            --urls "$installerUrl|x64|machine" `
+            --urls "$installerUrl|x64" `
             --version $env:VERSION `
-            --submit `
             --token $env:WINGET_CREATE_GITHUB_TOKEN `
+            --out $manifestRoot
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "WingetCreate update failed with exit code $LASTEXITCODE."
+          }
+
+          $installerManifest = Join-Path $manifestDirectory 'Vergil.PrintBridge.installer.yaml'
+          if (-not (Test-Path -LiteralPath $installerManifest)) {
+            throw "Generated installer manifest not found: $installerManifest"
+          }
+
+          $lines = [System.Collections.Generic.List[string]]::new([string[]](Get-Content -LiteralPath $installerManifest))
+          if (-not $lines.Contains('Scope: machine')) {
+            $installerTypeIndex = $lines.IndexOf('InstallerType: wix')
+            if ($installerTypeIndex -lt 0) {
+              throw "Expected InstallerType: wix in $installerManifest"
+            }
+
+            $lines.Insert($installerTypeIndex + 1, 'Scope: machine')
+            Set-Content -LiteralPath $installerManifest -Value $lines -Encoding utf8
+          }
+
+      - name: Submit WinGet manifest
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          $manifestDirectory = "manifests/v/Vergil/PrintBridge/$($env:VERSION)"
+          & .\wingetcreate.exe submit `
+            $manifestDirectory `
             --prtitle "Update: Vergil.PrintBridge to $($env:VERSION)" `
+            --token $env:WINGET_CREATE_GITHUB_TOKEN `
             --no-open
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "WingetCreate submit failed with exit code $LASTEXITCODE."
+          }
