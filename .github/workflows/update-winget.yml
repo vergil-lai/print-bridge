@@ -1,0 +1,71 @@
+name: update-winget
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-winget-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  update-manifest:
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: windows-latest
+    steps:
+      - name: Read release version
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+        run: |
+          if [[ ! "$TAG_NAME" =~ ^printbridge-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Unexpected release tag: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            IS_PRERELEASE="$(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')"
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              echo "Refusing to update WinGet for prerelease $TAG_NAME." >&2
+              exit 1
+            fi
+          fi
+
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+      - name: Download WingetCreate
+        shell: pwsh
+        run: Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Update WinGet manifest
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
+            throw 'Missing WINGET_CREATE_GITHUB_TOKEN secret.'
+          }
+
+          $installerUrl = "https://github.com/vergil-lai/print-bridge/releases/download/$($env:TAG_NAME)/PrintBridge_$($env:VERSION)_x64_en-US.msi"
+          & .\wingetcreate.exe update Vergil.PrintBridge `
+            --urls "$installerUrl|x64" `
+            --version $env:VERSION `
+            --submit `
+            --token $env:WINGET_CREATE_GITHUB_TOKEN `
+            --prtitle "Update: Vergil.PrintBridge to $($env:VERSION)" `
+            --no-open

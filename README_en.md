@@ -121,6 +121,14 @@ Download the latest version from [Releases](https://github.com/vergil-lai/print-
 | Desktop  | Linux    | x86_64, ARM64        | `.deb`, `.rpm`, `.AppImage`           |
 | Headless | Linux    | x86_64, ARM64        | `.deb`, `.rpm`                        |
 
+### WinGet (Windows)
+
+Run the following command in PowerShell to install the latest Desktop version:
+
+```powershell
+winget install --id Vergil.PrintBridge --exact
+```
+
 ### PowerShell (Windows)
 
 Run the following command in PowerShell to download, verify, and install the latest x64 version:
