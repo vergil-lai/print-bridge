@@ -50,6 +50,28 @@ jobs:
         shell: pwsh
         run: Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
 
+      - name: Sync WinGet fork
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
+            throw 'Missing WINGET_CREATE_GITHUB_TOKEN secret.'
+          }
+
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:WINGET_CREATE_GITHUB_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $body = @{ branch = 'master' } | ConvertTo-Json
+          Invoke-RestMethod `
+            -Method Post `
+            -Uri 'https://api.github.com/repos/vergil-lai/winget-pkgs/merge-upstream' `
+            -Headers $headers `
+            -ContentType 'application/json' `
+            -Body $body
+
       - name: Update WinGet manifest
         shell: pwsh
         env:
