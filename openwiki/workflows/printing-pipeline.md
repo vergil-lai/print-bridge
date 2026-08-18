@@ -62,7 +62,7 @@ loop {
     ├── 解析打印机（指定或默认）+ 纸张（指定或默认）
     │
     ├── 如需要则转换为 PDF
-    │   ├── Office（docx/xlsx/pptx）→ office_to_pdf()，通过 LibreOffice 或 Windows COM
+    │   ├── Office（docx/xlsx/pptx）→ office_to_pdf()，通过 LibreOffice 或 Windows 转换器链
     │   ├── 图片（PNG/JPEG）→ image_to_pdf()，通过 printpdf crate（适应纸张，203 DPI）
     │   └── PDF → normalize_pdf_path()（确保 .pdf 扩展名以适配打印工具）
     │
@@ -102,7 +102,7 @@ PrintBridge 使用 **magic byte 检测**来验证文件内容与声明的格式�
 
 ## Office → PDF 转换
 
-Office 文档（docx/xlsx/pptx）通过平台原生 Office 软件转换为 PDF（`office.rs` + `office/`）。在 macOS/Linux 上，在隔离的 profile 中调用 LibreOffice（`soffice`/`libreoffice`），宏安全级别设为最高。在 Windows 上，使用原生 Windows COM 接口。转换有 120 秒超时。打印结果取决于 LibreOffice 的渲染——不保证与 Microsoft Office 或 WPS 完全一致。
+Office 文档（docx/xlsx/pptx）通过平台本机 Office 软件转换为 PDF（`office.rs` + `office/`）。在 macOS/Linux 上，在隔离的 profile 中调用 LibreOffice（`soffice`/`libreoffice`），宏安全级别设为最高。在 Windows 上按格式依次尝试 Microsoft Office COM、WPS Office COM、LibreOffice，只在转换器不可用、无法证明新建进程归任务所有或必要安全控制不可用时回退；打开文档之后的失败不回退。COM 转换不会复用或关闭用户已有进程。转换有 120 秒超时，打印结果取决于实际选中的软件、字体和系统环境。
 
 ## HTML 渲染流水线
 

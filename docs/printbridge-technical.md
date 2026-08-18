@@ -12,7 +12,7 @@
 | 构建        | [Vite](https://vite.dev/)                                                            |
 | 后端        | Rust + [Axum](https://docs.rs/axum/latest/axum/) + [Tokio](https://tokio.rs/)        |
 | 存储        | JSON配置文件 + [SQLite](https://www.sqlite.org/)                                     |
-| Office 转换 | Microsoft Office（Windows）/ LibreOffice（macOS/Linux）                            |
+| Office 转换 | Windows：Microsoft Office → WPS Office → LibreOffice；macOS/Linux：LibreOffice     |
 | 平台打印    | [SumatraPDF](https://www.sumatrapdfreader.org/)(Windows) / CUPS `lp` (macOS/Linux)   |
 
 ## 当前架构
@@ -136,12 +136,16 @@ PrintBridge 是本机打印 Agent，不是打印机驱动，也不替代系统�
 
 - PDF
 - PNG/JPEG 图片，任务格式可传 `image`，本地服务会按文件内容识别
-- docx/xlsx/pptx Office 文件。Windows 分别调用本机 Microsoft Word、Excel、PowerPoint；macOS/Linux 调用本机 LibreOffice。PrintBridge 会把文件转换为临时 PDF，再提交到系统打印队列；转换效果由本机 Office 软件、字体和系统环境决定。
+- docx/xlsx/pptx Office 文件。Windows 按格式依次尝试 Microsoft Office、WPS Office、LibreOffice；macOS/Linux 调用本机 LibreOffice。PrintBridge 会把文件转换为临时 PDF，再提交到系统打印队列；转换效果由实际选中的 Office 软件、字体和系统环境决定。
 - 原始打印指令（Raw Commands），任务格式传 `raw`，内容使用 `data_base64`
 
 ### Office 转换
 
-Office 文件会先按 OOXML 容器内容确认格式，再复制到任务专属的临时目录并补上正确扩展名。macOS/Linux 使用带隔离用户配置的 LibreOffice headless 进程转换，并把宏安全级别设为最高且不配置可信路径；Windows 分别通过 Word、Excel、PowerPoint 的 COM 自动化接口转换。
+Office 文件会先按 OOXML 容器内容确认格式，再复制到任务专属的临时目录并补上正确扩展名。macOS/Linux 使用带隔离用户配置的 LibreOffice headless 进程转换，并把宏安全级别设为最高且不配置可信路径。Windows 先通过 Microsoft Word/Excel/PowerPoint COM 转换，再尝试 WPS Writer/Spreadsheets/Presentation COM，最后尝试 LibreOffice；只在可执行文件或 COM 不可用、不能确认新建进程归任务所有，或必要的自动化安全控制不可用时回退。文档打开、密码、转换、超时和无效 PDF 等任务失败不会回退。
+
+Windows COM 转换会关闭宏自动化和外部链接交互，并只关闭通过 PID、启动时间和进程名确认由本任务新建的实例，不复用或关闭用户已有进程。WPS 若不能证明独立实例所有权，会被视为不可用；单组件模式持续复用已有进程时，可以尝试多组件安装模式。成功任务日志会记录实际使用的转换器。
+
+发布 Windows WPS 能力前，应在真实 Windows 环境分别验证 DOCX、XLSX、PPTX：转换成功、无可见窗口、宏不执行，并且用户已打开的 WPS 会话不受影响。
 
 单次转换最长 120 秒。转换后会校验输出文件存在、非空且以 `%PDF-` 开头，随后清理临时文件。Windows 超时时会按进程 PID、启动时间和进程名确认归属后，只终止本任务启动的 Office 实例；不会关闭用户已有的 Office 会话。
 
@@ -254,7 +258,7 @@ print-bridge serve
 
 CLI 与 GUI 共用强类型 `CommandService`；GUI 在进程内执行命令，外部 CLI 通过本地 IPC 调用运行中的 Agent。`serve` 只存在于 Linux headless 产品。
 
-`doctor` 只检查本地配置、目录权限、Agent/IPC、端口、打印机、浏览器、Office/LibreOffice、远程配置完整性以及 Headless systemd 环境；不会连接远程任务服务器、提交打印或修改配置。有 FAIL 时退出码为 1，只有 WARN 时仍为 0。其他稳定退出码为：参数错误 2、Agent 未运行 3、权限错误 4、冲突 5。
+`doctor` 只检查本地配置、目录权限、Agent/IPC、端口、打印机、浏览器、Office 转换器、远程配置完整性以及 Headless systemd 环境；不会启动 Office、连接远程任务服务器、提交打印或修改配置。Office 检查拆分为 `office.docx`、`office.xlsx`、`office.pptx`，显示候选顺序和首个被动探测到的转换器；真正的 COM 激活、进程所有权和转换能力在任务运行时验证。有 FAIL 时退出码为 1，只有 WARN 时仍为 0。其他稳定退出码为：参数错误 2、Agent 未运行 3、权限错误 4、冲突 5。
 
 ## Headless Linux 部署
 
@@ -440,7 +444,7 @@ Office 任务：
 }
 ```
 
-Office 文件支持 `docx`、`xlsx` 和 `pptx`，本地服务会调用当前平台的本机 Office 软件转换为临时 PDF，再进入 PDF 打印链路。Windows 分别需要 Microsoft Word、Excel、PowerPoint；macOS/Linux 需要 LibreOffice。Office 任务只支持 HTTP(S) `file_url`，不支持 data URL。对应软件不存在、转换失败或超过 120 秒时，任务进入 `failed`。
+Office 文件支持 `docx`、`xlsx` 和 `pptx`，本地服务会调用当前平台的本机 Office 软件转换为临时 PDF，再进入 PDF 打印链路。Windows 按格式使用 Microsoft Office → WPS Office → LibreOffice；macOS/Linux 使用 LibreOffice。Office 任务只支持 HTTP(S) `file_url`，不支持 data URL。所有转换器均不可用、转换失败或超过 120 秒时，任务进入 `failed`。
 
 HTML URL 任务：
 

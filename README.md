@@ -239,8 +239,9 @@ Desktop 的“设置”页会显示命令行工具状态：macOS 可授权创建
 
 如果需要打印 Office 文件，还必须安装本机转换软件：
 
-- Windows：DOCX 需要 Microsoft Word，XLSX 需要 Microsoft Excel，PPTX 需要 Microsoft PowerPoint。
+- Windows：DOCX、XLSX、PPTX 会按对应格式依次尝试 Microsoft Office、WPS Office、LibreOffice。仅当当前转换器未安装、COM 无法创建新的独立实例，或必要的自动化安全控制不可用时才回退；文档打开、转换、超时或 PDF 校验失败不会回退。
 - macOS/Linux：需要安装 LibreOffice，并确保系统能够调用 `soffice` 或 `libreoffice`。
+- WPS 转换必须能确认 PrintBridge 拥有一个新建进程；否则会尝试下一个转换器。若单组件 WPS 总是复用已有用户进程，可以尝试安装多组件模式。PrintBridge 不会关闭用户原有的 Office/WPS 进程。
 
 PrintBridge 不内置 Office 转换器。缺少对应软件、转换失败或转换超过 120 秒时，该 Office 打印任务会失败。
 Windows 发生转换超时时，只会清理该任务启动的 Office 实例，不会关闭用户已经打开的 Word、Excel 或 PowerPoint。

@@ -12,7 +12,7 @@ use thiserror::Error;
 use tokio::{io::AsyncReadExt, process::Command};
 use zip::{result::ZipError, ZipArchive};
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod libreoffice;
 
 #[cfg(target_os = "windows")]
@@ -49,8 +49,18 @@ pub enum OfficeConvertError {
     UnsupportedFormat,
     #[error(transparent)]
     Io(#[from] io::Error),
-    #[error("office converter unavailable: {converter}")]
-    ConverterUnavailable { converter: &'static str },
+    #[error("office converter unavailable: {converter} ({reason})")]
+    ConverterUnavailable {
+        converter: &'static str,
+        reason: String,
+    },
+    #[error("office converters unavailable: {attempts}")]
+    ConvertersUnavailable { attempts: String },
+    #[error("{source}; unavailable before selection: {unavailable}")]
+    FallbackFailed {
+        source: Box<OfficeConvertError>,
+        unavailable: String,
+    },
     #[error("office conversion timed out after {seconds} seconds: {converter}")]
     TimedOut {
         converter: &'static str,
@@ -63,6 +73,13 @@ pub enum OfficeConvertError {
     },
     #[error("office converter produced an invalid PDF: {converter}")]
     InvalidPdf { converter: &'static str },
+}
+
+/// `doctor` 被动探测到的 Office 转换器状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OfficeCandidateStatus {
+    pub name: &'static str,
+    pub available: bool,
 }
 
 /// 把协议中的支持格式映射为 Office 转换格式。
@@ -104,7 +121,7 @@ pub async fn office_to_pdf(
     input_path: &Path,
     format: OfficeFormat,
     output_path: &Path,
-) -> Result<(), OfficeConvertError> {
+) -> Result<&'static str, OfficeConvertError> {
     office_to_pdf_with_converter(
         input_path,
         format,
@@ -122,7 +139,7 @@ async fn office_to_pdf_with_converter<F, Fut>(
     format: OfficeFormat,
     output_path: &Path,
     converter: F,
-) -> Result<(), OfficeConvertError>
+) -> Result<&'static str, OfficeConvertError>
 where
     F: FnOnce(PathBuf, OfficeFormat, PathBuf) -> Fut,
     Fut: Future<Output = Result<&'static str, OfficeConvertError>>,
@@ -147,18 +164,18 @@ where
     };
 
     let conversion_result = match converter(staged_path, format, output_path.to_path_buf()).await {
-        Ok(converter_name) => validate_pdf(output_path, converter_name),
+        Ok(converter_name) => validate_pdf(output_path, converter_name).map(|()| converter_name),
         Err(error) => Err(error),
     };
     let cleanup_result = tokio::fs::remove_dir_all(&work_dir).await;
 
     match conversion_result {
-        Ok(()) => {
+        Ok(converter_name) => {
             if let Err(error) = cleanup_result {
                 let _ = tokio::fs::remove_file(output_path).await;
                 return Err(error.into());
             }
-            Ok(())
+            Ok(converter_name)
         }
         Err(error) => {
             let _ = tokio::fs::remove_file(output_path).await;
@@ -184,7 +201,7 @@ fn staged_input_path(
 }
 
 /// 校验转换器输出存在、非空且具有 PDF 文件头。
-fn validate_pdf(path: &Path, converter: &'static str) -> Result<(), OfficeConvertError> {
+pub(crate) fn validate_pdf(path: &Path, converter: &'static str) -> Result<(), OfficeConvertError> {
     let invalid = || OfficeConvertError::InvalidPdf { converter };
     let metadata = fs::metadata(path).map_err(|_| invalid())?;
     if metadata.len() <= 5 {
@@ -198,6 +215,27 @@ fn validate_pdf(path: &Path, converter: &'static str) -> Result<(), OfficeConver
         return Err(invalid());
     }
     Ok(())
+}
+
+/// 返回指定格式在当前平台的被动转换器探测结果。
+pub(crate) fn office_candidate_statuses(format: OfficeFormat) -> Vec<OfficeCandidateStatus> {
+    #[cfg(target_os = "windows")]
+    {
+        return windows::candidate_statuses(format);
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let _ = format;
+        return vec![OfficeCandidateStatus {
+            name: "LibreOffice",
+            available: libreoffice::find_libreoffice().is_some(),
+        }];
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = format;
+        Vec::new()
+    }
 }
 
 /// 删除文件，同时把不存在视为清理成功。
@@ -252,6 +290,7 @@ async fn convert_with_current_backend(
 ) -> Result<&'static str, OfficeConvertError> {
     Err(OfficeConvertError::ConverterUnavailable {
         converter: "Office converter",
+        reason: "unsupported platform".to_string(),
     })
 }
 
@@ -293,7 +332,10 @@ async fn execute_converter_command_with_optional_cleanup(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(OfficeConvertError::ConverterUnavailable { converter });
+            return Err(OfficeConvertError::ConverterUnavailable {
+                converter,
+                reason: "executable not found".to_string(),
+            });
         }
         Err(error) => return Err(error.into()),
     };
@@ -665,7 +707,8 @@ mod tests {
         assert!(matches!(
             error,
             OfficeConvertError::ConverterUnavailable {
-                converter: "Missing Office"
+                converter: "Missing Office",
+                ..
             }
         ));
     }

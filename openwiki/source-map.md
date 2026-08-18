@@ -27,7 +27,7 @@ PrintBridge/                       # Cargo workspace（5 个成员）
 │   │       ├── doctor.rs          # Doctor 诊断检查
 │   │       ├── html/              # HTML → PDF 渲染（通过 CDP 调用 Chrome/Chromium）
 │   │       ├── printing/          # 平台打印后端（CUPS、Windows）
-│   │       ├── office/            # Office → PDF 转换（LibreOffice / Windows COM）
+│   │       ├── office/            # Office → PDF 转换（LibreOffice / Windows 转换器链）
 │   │       ├── document.rs        # Magic byte 检测，图片→PDF
 │   │       ├── download.rs        # HTTP/HTTPS/data URL 下载到临时文件
 │   │       ├── ipc/               # 本地 IPC（Unix socket / Windows 命名管道）
@@ -107,7 +107,7 @@ AgentRuntime 生命周期、平台适配器和所有后台任务。
 | `builder.rs` | `RuntimeBuilder`——路径 + 可选打印后端和 HTML 渲染器 → `AgentRuntime`。`RuntimePaths`（配置、数据、运行时目录）。 | 默认：`printing::default_backend()` 和 `BrowserHtmlRenderer`。 |
 | `state.rs` | `AgentState`——共享容器：配置、队列、stores、打印后端、HTML 渲染器、IPC 执行器。 | 通过 `Arc` 低成本克隆。`status_events` 广播容量为 128。 |
 | `command_executor.rs` | `RuntimeCommandExecutor`——`Command` 的离线执行器（Agent 未运行时使用）。 | |
-| `doctor.rs` | `run_doctor`——只读诊断检查（配置有效性、数据目录、端口、打印机、浏览器、Office、systemd、远程）。 | 检查浏览器（Chrome/Chromium）和 LibreOffice 可用性。 |
+| `doctor.rs` | `run_doctor`——只读诊断检查（配置有效性、数据目录、端口、打印机、浏览器、Office、systemd、远程）。 | 被动检查浏览器和各格式 Office 转换器，不启动 Office。 |
 
 ### 服务器与 IPC
 
@@ -127,7 +127,7 @@ AgentRuntime 生命周期、平台适配器和所有后台任务。
 | `printing/cups.rs` | macOS/Linux 后端：`lp`、`lpstat`、`lpoptions`。通过 `lpstat -W completed` 跟踪作业。 | 从 `lp` 输出解析作业 ID 较脆弱。 |
 | `printing/windows.rs` | Windows 后端：PDF 使用 SumatraPDF CLI，raw 使用 Win32 Spooler API。 | 无作业跟踪（`tracking_supported: false`）。 |
 | `document.rs` | Magic byte 检测（PDF/PNG/JPEG），通过 `printpdf` 进行图片→PDF 转换。 | 标签打印机假设 203 DPI。 |
-| `office.rs` + `office/` | Office 格式检测 + 转换。macOS/Linux：LibreOffice（`libreoffice.rs`）。Windows：原生 COM（`windows.rs`）。 | 转换保真度取决于 LibreOffice 渲染——不保证与 MS Office 完全一致。120 秒转换超时。 |
+| `office.rs` + `office/` | Office 格式检测 + 转换。macOS/Linux：LibreOffice（`libreoffice.rs`）。Windows：Microsoft Office → WPS Office → LibreOffice（`windows.rs`）。 | 仅在转换器不可用时回退；转换保真度取决于实际软件。120 秒转换超时。 |
 | `download.rs` | `download_to_temp`：HTTP/HTTPS 流式 + data URL。双层大小限制。超时。 | Content-Length 检查 + 流式字节计数。出错时清理部分文件。 |
 
 ### HTML 渲染（`html/`）

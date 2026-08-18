@@ -61,6 +61,12 @@ enum ProcessJobError {
     Print(#[from] PrintError),
 }
 
+/// 已规范化的可打印 PDF，以及产生它的 Office 转换器。
+struct PreparedPdf {
+    path: PathBuf,
+    office_converter: Option<&'static str>,
+}
+
 /// 运行后台 worker 循环，等待并处理队列任务。
 pub async fn run_worker(state: AgentState) {
     run_worker_until(state, CancellationToken::new()).await;
@@ -257,14 +263,25 @@ async fn print_downloaded_file(
     options: &PrintOptions,
     downloaded_path: &Path,
 ) -> Result<(), ProcessJobError> {
-    let printable_path =
+    let printable =
         prepare_printable_pdf(downloaded_path, queued_job.job.format, &options.paper).await?;
 
-    let result = submit_pdf_and_track(state, queued_job, options, &printable_path).await;
+    if let Some(converter) = printable.office_converter {
+        push_log_with_metadata(
+            state,
+            queued_job,
+            JobStatus::Printing,
+            &format!("converted office with {converter}"),
+            Some(options),
+        )
+        .await;
+    }
+
+    let result = submit_pdf_and_track(state, queued_job, options, &printable.path).await;
 
     // 转换后的图片会生成第二个临时 PDF，原始 PDF 则复用下载路径。
-    if printable_path != downloaded_path {
-        cleanup_file(&printable_path).await;
+    if printable.path != downloaded_path {
+        cleanup_file(&printable.path).await;
     }
 
     result
@@ -382,7 +399,7 @@ async fn prepare_printable_pdf(
     downloaded_path: &Path,
     expected_format: SupportedFormat,
     paper: &PaperInfo,
-) -> Result<PathBuf, ProcessJobError> {
+) -> Result<PreparedPdf, ProcessJobError> {
     if let Some(expected_office_format) = office_format_from_supported(expected_format) {
         let actual_office_format = detect_office_format(downloaded_path)?;
         if actual_office_format != Some(expected_office_format) {
@@ -393,8 +410,12 @@ async fn prepare_printable_pdf(
         }
 
         let output_path = downloaded_path.with_extension("pdf");
-        office_to_pdf(downloaded_path, expected_office_format, &output_path).await?;
-        return Ok(output_path);
+        let converter =
+            office_to_pdf(downloaded_path, expected_office_format, &output_path).await?;
+        return Ok(PreparedPdf {
+            path: output_path,
+            office_converter: Some(converter),
+        });
     }
 
     let actual_format =
@@ -407,7 +428,10 @@ async fn prepare_printable_pdf(
     }
 
     match actual_format {
-        DocumentFormat::Pdf => normalize_pdf_path(downloaded_path).await,
+        DocumentFormat::Pdf => Ok(PreparedPdf {
+            path: normalize_pdf_path(downloaded_path).await?,
+            office_converter: None,
+        }),
         DocumentFormat::Png | DocumentFormat::Jpeg => {
             let output_path = downloaded_path.with_extension("pdf");
             image_to_pdf(
@@ -418,7 +442,10 @@ async fn prepare_printable_pdf(
                 },
                 &output_path,
             )?;
-            Ok(output_path)
+            Ok(PreparedPdf {
+                path: output_path,
+                office_converter: None,
+            })
         }
     }
 }

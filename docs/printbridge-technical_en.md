@@ -12,7 +12,7 @@
 | Build             | [Vite](https://vite.dev/)                                                            |
 | Backend           | Rust + [Axum](https://docs.rs/axum/latest/axum/) + [Tokio](https://tokio.rs/)        |
 | Storage           | JSON config file + [SQLite](https://www.sqlite.org/)                                 |
-| Office conversion | Microsoft Office (Windows) / LibreOffice (macOS/Linux)                         |
+| Office conversion | Windows: Microsoft Office → WPS Office → LibreOffice; macOS/Linux: LibreOffice  |
 | Platform printing | [SumatraPDF](https://www.sumatrapdfreader.org/)(Windows) / CUPS `lp` (macOS/Linux)   |
 
 ## Current Architecture
@@ -136,12 +136,16 @@ The current version is designed for these input types:
 
 - PDF
 - PNG/JPEG images. Tasks may use `format: "image"`; the local service detects the actual file content.
-- DOCX/XLSX/PPTX Office files. Windows uses the locally installed Microsoft Word, Excel, or PowerPoint application for the matching format; macOS/Linux uses the locally installed LibreOffice. PrintBridge converts the file to a temporary PDF before submitting it to the system print queue. Rendering depends on the local Office software, fonts, and operating-system environment.
+- DOCX/XLSX/PPTX Office files. Windows tries the matching Microsoft Office, WPS Office, and LibreOffice application in that order; macOS/Linux uses the locally installed LibreOffice. PrintBridge converts the file to a temporary PDF before submitting it to the system print queue. Rendering depends on the selected Office software, fonts, and operating-system environment.
 - Raw printer commands. Use `format: "raw"` and inline `data_base64`.
 
 ### Office Conversion
 
-Office files are first identified from their OOXML container contents, then copied into a task-specific temporary directory with the correct extension. On macOS/Linux, LibreOffice runs headlessly with an isolated user profile, the highest macro-security level, and no trusted locations. On Windows, conversion uses the COM automation interface of Word, Excel, or PowerPoint.
+Office files are first identified from their OOXML container contents, then copied into a task-specific temporary directory with the correct extension. On macOS/Linux, LibreOffice runs headlessly with an isolated user profile, the highest macro-security level, and no trusted locations. Windows first uses Microsoft Word/Excel/PowerPoint COM, then WPS Writer/Spreadsheets/Presentation COM, and finally LibreOffice. Fallback occurs only when the executable or COM server is unavailable, ownership of a newly created process cannot be proven, or required automation security controls are unavailable. Document-open, password, conversion, timeout, and invalid-PDF failures do not fall back.
+
+Windows COM conversion disables macro automation and external-link interaction. It closes only an instance proven to have been created by the current task through its PID, start time, and process name; an existing user process is neither reused nor closed. WPS is considered unavailable when independent ownership cannot be proven. A multi-component WPS installation can be tried when single-component mode continually reuses an existing process. Successful task logs identify the converter actually used.
+
+Before releasing the Windows WPS capability, validate DOCX, XLSX, and PPTX on a real Windows system: conversion succeeds without a visible window, macros do not run, and an already-open user WPS session remains unaffected.
 
 Each conversion is limited to 120 seconds. PrintBridge verifies that the output exists, is non-empty, and begins with `%PDF-`, then removes temporary files. On Windows timeout, it confirms ownership using the process PID, start time, and process name, then terminates only the Office instance started for that task; existing user Office sessions remain untouched.
 
@@ -254,7 +258,7 @@ print-bridge serve
 
 The CLI and GUI share the strongly typed `CommandService`; the GUI executes commands in process, while an external CLI calls a running Agent over local IPC. `serve` exists only in the Linux headless product.
 
-`doctor` only checks local configuration, directory permissions, Agent/IPC state, the service port, printers, browser, Office/LibreOffice, remote configuration completeness, and the Headless systemd environment. It does not contact the remote task server, submit prints, or change configuration. FAIL exits with 1; WARN-only reports exit with 0. Other stable exits are invalid input 2, Agent not running 3, permission denied 4, and conflict 5.
+`doctor` only checks local configuration, directory permissions, Agent/IPC state, the service port, printers, the browser, Office converters, remote configuration completeness, and the Headless systemd environment. It does not launch Office, contact the remote task server, submit prints, or change configuration. Office checks are split into `office.docx`, `office.xlsx`, and `office.pptx`; each shows the candidate order and the first passively detected converter. Actual COM activation, process ownership, and conversion capability are verified when a task runs. FAIL exits with 1; WARN-only reports exit with 0. Other stable exits are invalid input 2, Agent not running 3, permission denied 4, and conflict 5.
 
 ## Headless Linux deployment
 
@@ -440,7 +444,7 @@ Office task:
 }
 ```
 
-Office files support `docx`, `xlsx`, and `pptx`. The local service uses the current platform's installed Office software to create a temporary PDF before entering the PDF print flow. Windows requires Microsoft Word, Excel, or PowerPoint for the matching format; macOS/Linux requires LibreOffice. Office tasks only support HTTP(S) `file_url`; data URLs are not supported. The task enters `failed` when the required software is unavailable, conversion fails, or conversion exceeds 120 seconds.
+Office files support `docx`, `xlsx`, and `pptx`. The local service uses the current platform's installed Office software to create a temporary PDF before entering the PDF print flow. Windows uses Microsoft Office → WPS Office → LibreOffice for each matching format; macOS/Linux uses LibreOffice. Office tasks only support HTTP(S) `file_url`; data URLs are not supported. The task enters `failed` when all converters are unavailable, conversion fails, or conversion exceeds 120 seconds.
 
 HTML URL task:
 

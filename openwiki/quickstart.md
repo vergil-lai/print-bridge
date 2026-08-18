@@ -14,7 +14,7 @@ PrintBridge 是一个运行在用户本地电脑上的打印代理。它允许�
 | 构建 | Vite |
 | 后端 | Rust + Axum + Tokio |
 | 存储 | JSON 配置 + SQLite |
-| Office 转换 | LibreOffice（macOS/Linux）/ Windows 原生 COM |
+| Office 转换 | LibreOffice（macOS/Linux）/ Windows：Microsoft Office → WPS Office → LibreOffice |
 | HTML 渲染 | 通过 CDP 的 Headless Chrome/Chromium/Edge（带 SSRF 防护代理） |
 | 平台打印 | SumatraPDF（Windows）/ CUPS `lp`（macOS/Linux） |
 

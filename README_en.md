@@ -239,8 +239,9 @@ The Desktop Settings tab shows command-line tool status: macOS can create `/usr/
 
 Printing Office files also requires locally installed conversion software:
 
-- Windows: DOCX requires Microsoft Word, XLSX requires Microsoft Excel, and PPTX requires Microsoft PowerPoint.
+- Windows: DOCX, XLSX, and PPTX try the matching Microsoft Office, WPS Office, and LibreOffice application in that order. Fallback occurs only when a converter is not installed, COM cannot create a new independently owned instance, or required automation security controls are unavailable. Document-open, conversion, timeout, and PDF-validation failures do not fall back.
 - macOS/Linux: install LibreOffice and make `soffice` or `libreoffice` available to the system.
+- WPS conversion must prove that PrintBridge owns a newly created process; otherwise the next converter is tried. If a single-component WPS installation always reuses an existing user process, a multi-component installation can be tried. PrintBridge never closes an Office/WPS process that was already running for the user.
 
 PrintBridge does not bundle an Office converter. The Office print job fails when the required software is unavailable, conversion fails, or conversion exceeds 120 seconds.
 When a Windows conversion times out, PrintBridge only cleans up the Office instance started for that task; it does not close Word, Excel, or PowerPoint sessions already opened by the user.

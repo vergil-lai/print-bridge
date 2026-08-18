@@ -160,7 +160,7 @@ HTML 作业在 headless Chrome/Chromium/Edge 浏览器中渲染页面，导出�
 |------|------|------|
 | `pdf` | `file_url` 或 `data:application/pdf;base64,...` | 无 |
 | `image` / `png` / `jpg` / `jpeg` | `file_url` | 图片 → PDF（适应纸张尺寸，203 DPI） |
-| `docx` / `xlsx` / `pptx` | `file_url`（仅 HTTP/HTTPS） | Office → PDF，通过 LibreOffice（macOS/Linux）或 Windows COM |
+| `docx` / `xlsx` / `pptx` | `file_url`（仅 HTTP/HTTPS） | Office → PDF；macOS/Linux 使用 LibreOffice，Windows 使用 Microsoft Office → WPS Office → LibreOffice |
 | `html` | `file_url`（绝对 HTTP/HTTPS） | HTML → PDF，通过 headless Chrome/Chromium（带 SSRF 防护代理） |
 | `raw-html` | `html`（内联字符串） | HTML → PDF，通过 headless Chrome/Chromium（带 SSRF 防护代理） |
 | `raw` | `data_base64` | 无——字节原样提交 |

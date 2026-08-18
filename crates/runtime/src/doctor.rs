@@ -1,7 +1,7 @@
 use std::{
     env,
     net::{SocketAddr, TcpListener},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use print_bridge_cli::{DoctorCheck, DoctorReport, DoctorStatus, ProductKind};
@@ -12,6 +12,7 @@ use crate::{
         browser::{check_browser_launch, BrowserExecutable},
         HtmlRenderError,
     },
+    office::{office_candidate_statuses, OfficeCandidateStatus, OfficeFormat},
     state::AgentState,
 };
 
@@ -29,8 +30,8 @@ pub async fn run_doctor(
         port_check(&config, listen_addr),
         printer_check(state),
         browser_check(check_browser_launch()),
-        executable_check("office.available", office_candidates(), office_suggestion()),
     ];
+    checks.extend(office_checks());
     if product == ProductKind::Headless {
         checks.push(systemd_check(state.config_path.as_deref()));
     }
@@ -166,24 +167,6 @@ fn printer_check(state: &AgentState) -> DoctorCheck {
     }
 }
 
-fn executable_check(code: &str, candidates: &[&str], suggestion: &str) -> DoctorCheck {
-    if let Some(path) = find_executable(candidates) {
-        check(
-            code,
-            DoctorStatus::Pass,
-            format!("Executable found at {}.", path.display()),
-            None,
-        )
-    } else {
-        check(
-            code,
-            DoctorStatus::Warn,
-            format!("None of {} were found.", candidates.join(", ")),
-            Some(suggestion),
-        )
-    }
-}
-
 /// 把 HTML 打印使用的浏览器探测结果转换为诊断项。
 fn browser_check(result: Result<BrowserExecutable, HtmlRenderError>) -> DoctorCheck {
     match result {
@@ -202,29 +185,54 @@ fn browser_check(result: Result<BrowserExecutable, HtmlRenderError>) -> DoctorCh
     }
 }
 
-fn find_executable(candidates: &[&str]) -> Option<PathBuf> {
-    let paths = env::var_os("PATH")?;
-    env::split_paths(&paths)
-        .flat_map(|directory| candidates.iter().map(move |name| directory.join(name)))
-        .find(|path| path.is_file())
+/// 返回 DOCX、XLSX、PPTX 各自的被动 Office 转换器检查。
+fn office_checks() -> Vec<DoctorCheck> {
+    [
+        ("office.docx", OfficeFormat::Docx),
+        ("office.xlsx", OfficeFormat::Xlsx),
+        ("office.pptx", OfficeFormat::Pptx),
+    ]
+    .into_iter()
+    .map(|(code, format)| office_check(code, &office_candidate_statuses(format)))
+    .collect()
 }
 
-#[cfg(target_os = "windows")]
-fn office_candidates() -> &'static [&'static str] {
-    &["WINWORD.EXE", "EXCEL.EXE", "POWERPNT.EXE"]
-}
-#[cfg(not(target_os = "windows"))]
-fn office_candidates() -> &'static [&'static str] {
-    &["libreoffice", "soffice"]
-}
+/// 汇总一个 Office 格式的候选顺序和首个被动探测结果。
+fn office_check(code: &str, candidates: &[OfficeCandidateStatus]) -> DoctorCheck {
+    let chain = candidates
+        .iter()
+        .map(|candidate| {
+            format!(
+                "{} ({})",
+                candidate.name,
+                if candidate.available {
+                    "detected"
+                } else {
+                    "not detected"
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" -> ");
 
-#[cfg(target_os = "windows")]
-fn office_suggestion() -> &'static str {
-    "Install Microsoft Office for Office document printing."
-}
-#[cfg(not(target_os = "windows"))]
-fn office_suggestion() -> &'static str {
-    "Install LibreOffice for Office document printing."
+    if let Some(selected) = candidates.iter().find(|candidate| candidate.available) {
+        check(
+            code,
+            DoctorStatus::Pass,
+            format!(
+                "Selected {}. Candidates: {}. Runtime activation is verified when an Office print job runs.",
+                selected.name, chain
+            ),
+            None,
+        )
+    } else {
+        check(
+            code,
+            DoctorStatus::Warn,
+            format!("No Office converter was detected. Candidates: {chain}."),
+            Some("Install a supported Office converter for this document format."),
+        )
+    }
 }
 
 fn systemd_check(path: Option<&Path>) -> DoctorCheck {
@@ -292,6 +300,7 @@ fn check(
 mod tests {
     use super::*;
     use crate::html::browser::{BrowserExecutable, BrowserKind};
+    use std::path::PathBuf;
 
     #[test]
     fn browser_check_reports_the_browser_selected_by_html_printing() {
@@ -305,5 +314,44 @@ mod tests {
 
         assert_eq!(result.status, DoctorStatus::Pass);
         assert!(result.message.contains("Google Chrome.app"));
+    }
+
+    #[test]
+    fn office_check_selects_first_detected_candidate_in_order() {
+        let candidates = [
+            OfficeCandidateStatus {
+                name: "Microsoft Word",
+                available: false,
+            },
+            OfficeCandidateStatus {
+                name: "WPS Writer",
+                available: true,
+            },
+            OfficeCandidateStatus {
+                name: "LibreOffice",
+                available: true,
+            },
+        ];
+
+        let result = office_check("office.docx", &candidates);
+
+        assert_eq!(result.status, DoctorStatus::Pass);
+        assert!(result.message.contains("Selected WPS Writer"));
+        assert!(result.message.contains(
+            "Microsoft Word (not detected) -> WPS Writer (detected) -> LibreOffice (detected)"
+        ));
+    }
+
+    #[test]
+    fn office_check_warns_when_no_candidate_is_detected() {
+        let candidates = [OfficeCandidateStatus {
+            name: "LibreOffice",
+            available: false,
+        }];
+
+        let result = office_check("office.xlsx", &candidates);
+
+        assert_eq!(result.status, DoctorStatus::Warn);
+        assert!(result.message.contains("No Office converter was detected"));
     }
 }
