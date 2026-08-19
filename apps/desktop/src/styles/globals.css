@@ -121,3 +121,95 @@
     @apply bg-background text-foreground;
   }
 }
+
+.driver-popover.printbridge-tour-popover {
+  max-width: 340px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 18px 45px rgb(0 0 0 / 22%);
+}
+
+.printbridge-tour-popover .driver-popover-title {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.printbridge-tour-popover .driver-popover-description {
+  color: var(--muted-foreground);
+  line-height: 1.55;
+}
+
+.printbridge-tour-popover .driver-popover-progress-text {
+  color: var(--muted-foreground);
+}
+
+.printbridge-tour-popover .driver-popover-footer-btn {
+  border-color: var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.printbridge-tour-popover .driver-popover-footer-btn:hover,
+.printbridge-tour-popover .driver-popover-footer-btn:focus-visible {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.printbridge-tour-popover .driver-popover-footer-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.printbridge-tour-popover .driver-popover-next-btn {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.printbridge-tour-popover .driver-popover-next-btn:hover,
+.printbridge-tour-popover .driver-popover-next-btn:focus-visible {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  opacity: 0.9;
+}
+
+.printbridge-tour-popover .printbridge-tour-skip-btn {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.printbridge-tour-popover .driver-popover-arrow {
+  border-color: var(--popover);
+}
+
+.printbridge-tour-popover .driver-popover-arrow-side-left {
+  border-top-color: transparent;
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+}
+
+.printbridge-tour-popover .driver-popover-arrow-side-right {
+  border-top-color: transparent;
+  border-bottom-color: transparent;
+  border-left-color: transparent;
+}
+
+.printbridge-tour-popover .driver-popover-arrow-side-top {
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-left-color: transparent;
+}
+
+.printbridge-tour-popover .driver-popover-arrow-side-bottom {
+  border-top-color: transparent;
+  border-right-color: transparent;
+  border-left-color: transparent;
+}

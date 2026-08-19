@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { useI18n } from 'vue-i18n';
 import {
   Download,
+  CircleHelp,
   ExternalLink,
   FileDown,
   FileUp,
@@ -90,6 +91,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import CliIntegrationRow from '@/components/CliIntegrationRow.vue';
 import { DEFAULT_UI_LANGUAGE, isUiLanguage, setI18nLocale, type UiLanguage } from '@/i18n';
+import { useOnboarding } from '@/onboarding';
 
 const DEFAULT_PAPER: EffectivePaper = {
   width_mm: 60,
@@ -175,6 +177,12 @@ let taskHistoryRequestId = 0;
 let taskEventsRequestId = 0;
 
 const { t } = useI18n();
+const onboardingReady = computed(() => config.value !== null && !loadingConfig.value);
+const { replayOnboarding } = useOnboarding({
+  activeTab,
+  ready: onboardingReady,
+  t: (key) => t(key),
+});
 
 /** UI 请求当前使用的本地服务端口。 */
 const servicePort = computed(() => activePort.value ?? config.value?.service.port ?? 0);
@@ -1165,11 +1173,11 @@ onBeforeUnmount(() => {
       <header
         class="flex flex-col gap-3 border-b bg-background/80 pb-4 md:flex-row md:items-center md:justify-between"
       >
-        <div>
+        <div data-tour="app-status">
           <h1 class="text-xl font-semibold tracking-normal">PrintBridge</h1>
           <p class="text-sm text-muted-foreground">{{ t('localPort') }} {{ servicePort || '-' }}</p>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
+        <div data-tour="config-transfer" class="flex flex-wrap items-center gap-2">
           <Badge :variant="statusVariant">
             {{ statusLabel }}
           </Badge>
@@ -1254,105 +1262,110 @@ onBeforeUnmount(() => {
         <TabsContent value="settings" class="mt-2">
           <Card>
             <CardContent class="grid gap-3 px-4 pt-2 pb-4">
-              <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
-                <div class="grid gap-2">
-                  <Label for="default-printer">{{ t('defaultPrinter') }}</Label>
-                  <Select
-                    :model-value="selectedPrinter"
-                    @update:model-value="handlePrinterChange(String($event))"
+              <div data-tour="print-settings" class="grid gap-3">
+                <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
+                  <div class="grid gap-2">
+                    <Label for="default-printer">{{ t('defaultPrinter') }}</Label>
+                    <Select
+                      :model-value="selectedPrinter"
+                      @update:model-value="handlePrinterChange(String($event))"
+                    >
+                      <SelectTrigger id="default-printer" class="w-full">
+                        <SelectValue :placeholder="t('selectPrinter')" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem
+                          v-for="printer in printers"
+                          :key="printer.name"
+                          :value="printer.name"
+                        >
+                          {{ printer.name
+                          }}{{ printer.is_default ? ` (${t('systemDefault')})` : '' }}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    class="whitespace-nowrap"
+                    variant="outline"
+                    :disabled="loadingPrinters"
+                    @click="refreshPrinters"
                   >
-                    <SelectTrigger id="default-printer" class="w-full">
-                      <SelectValue :placeholder="t('selectPrinter')" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem
-                        v-for="printer in printers"
-                        :key="printer.name"
-                        :value="printer.name"
-                      >
-                        {{ printer.name }}{{ printer.is_default ? ` (${t('systemDefault')})` : '' }}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
+                    <RefreshCw class="size-4" :class="{ 'animate-spin': loadingPrinters }" />
+                    {{ t('refresh') }}
+                  </Button>
+                  <Button
+                    class="whitespace-nowrap"
+                    variant="outline"
+                    :disabled="!canTestPrint || testingPrint"
+                    @click="handleTestPrint"
+                  >
+                    <Printer class="size-4" />
+                    {{ testingPrint ? t('submitting') : t('testPrint') }}
+                  </Button>
                 </div>
-                <Button
-                  class="whitespace-nowrap"
-                  variant="outline"
-                  :disabled="loadingPrinters"
-                  @click="refreshPrinters"
-                >
-                  <RefreshCw class="size-4" :class="{ 'animate-spin': loadingPrinters }" />
-                  {{ t('refresh') }}
-                </Button>
-                <Button
-                  class="whitespace-nowrap"
-                  variant="outline"
-                  :disabled="!canTestPrint || testingPrint"
-                  @click="handleTestPrint"
-                >
-                  <Printer class="size-4" />
-                  {{ testingPrint ? t('submitting') : t('testPrint') }}
-                </Button>
-              </div>
 
-              <div
-                class="grid items-start gap-4 md:grid-cols-[minmax(0,1.35fr)_minmax(140px,0.45fr)_minmax(140px,0.45fr)]"
-              >
-                <div class="grid gap-2">
-                  <Label for="default-paper">{{ t('defaultPaper') }}</Label>
-                  <Select
-                    :model-value="selectedPaper"
-                    @update:model-value="selectedPaper = String($event)"
-                  >
-                    <SelectTrigger id="default-paper" class="w-full">
-                      <SelectValue :placeholder="t('selectPaper')" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="custom"> {{ t('customSize') }} </SelectItem>
-                      <SelectItem v-for="paper in papers" :key="paper.id" :value="paper.id">
-                        {{ formatPaperLabel(paper) }}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p class="text-xs text-muted-foreground">
-                    {{
-                      loadingPapers
-                        ? t('loadingPapers')
-                        : papers.length
-                          ? t('paperListReady')
-                          : t('paperListEmpty')
-                    }}
-                  </p>
-                </div>
-                <div class="grid gap-2">
-                  <Label for="paper-width">{{ t('widthMm') }}</Label>
-                  <Input
-                    id="paper-width"
-                    type="number"
-                    min="1"
-                    step="0.1"
-                    :model-value="config.printing.default_paper?.width_mm ?? DEFAULT_PAPER.width_mm"
-                    @update:model-value="setPaperDimension('width_mm', $event)"
-                  />
-                </div>
-                <div class="grid gap-2">
-                  <Label for="paper-height">{{ t('heightMm') }}</Label>
-                  <Input
-                    id="paper-height"
-                    type="number"
-                    min="1"
-                    step="0.1"
-                    :model-value="
-                      config.printing.default_paper?.height_mm ?? DEFAULT_PAPER.height_mm
-                    "
-                    @update:model-value="setPaperDimension('height_mm', $event)"
-                  />
+                <div
+                  class="grid items-start gap-4 md:grid-cols-[minmax(0,1.35fr)_minmax(140px,0.45fr)_minmax(140px,0.45fr)]"
+                >
+                  <div class="grid gap-2">
+                    <Label for="default-paper">{{ t('defaultPaper') }}</Label>
+                    <Select
+                      :model-value="selectedPaper"
+                      @update:model-value="selectedPaper = String($event)"
+                    >
+                      <SelectTrigger id="default-paper" class="w-full">
+                        <SelectValue :placeholder="t('selectPaper')" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="custom"> {{ t('customSize') }} </SelectItem>
+                        <SelectItem v-for="paper in papers" :key="paper.id" :value="paper.id">
+                          {{ formatPaperLabel(paper) }}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p class="text-xs text-muted-foreground">
+                      {{
+                        loadingPapers
+                          ? t('loadingPapers')
+                          : papers.length
+                            ? t('paperListReady')
+                            : t('paperListEmpty')
+                      }}
+                    </p>
+                  </div>
+                  <div class="grid gap-2">
+                    <Label for="paper-width">{{ t('widthMm') }}</Label>
+                    <Input
+                      id="paper-width"
+                      type="number"
+                      min="1"
+                      step="0.1"
+                      :model-value="
+                        config.printing.default_paper?.width_mm ?? DEFAULT_PAPER.width_mm
+                      "
+                      @update:model-value="setPaperDimension('width_mm', $event)"
+                    />
+                  </div>
+                  <div class="grid gap-2">
+                    <Label for="paper-height">{{ t('heightMm') }}</Label>
+                    <Input
+                      id="paper-height"
+                      type="number"
+                      min="1"
+                      step="0.1"
+                      :model-value="
+                        config.printing.default_paper?.height_mm ?? DEFAULT_PAPER.height_mm
+                      "
+                      @update:model-value="setPaperDimension('height_mm', $event)"
+                    />
+                  </div>
                 </div>
               </div>
 
               <Separator />
 
-              <div class="grid gap-4 md:grid-cols-2">
+              <div data-tour="service-settings" class="grid gap-4 md:grid-cols-2">
                 <div class="grid gap-2">
                   <Label for="service-port">{{ t('localPort') }}</Label>
                   <Input
@@ -1378,84 +1391,86 @@ onBeforeUnmount(() => {
 
               <Separator />
 
-              <div class="grid gap-3 rounded-md border px-3 py-2 md:grid-cols-2">
-                <div class="grid gap-2">
-                  <Label>{{ t('appearance') }}</Label>
-                  <div
-                    class="grid w-full grid-cols-3 gap-1 rounded-lg border bg-muted/40 p-1"
-                    role="group"
-                    :aria-label="t('appearance')"
-                  >
-                    <button
-                      type="button"
-                      :class="themeOptionClass('light')"
-                      :aria-pressed="themeMode === 'light'"
-                      @click="setThemeMode('light')"
+              <div data-tour="preferences-cli" class="grid gap-3">
+                <div class="grid gap-3 rounded-md border px-3 py-2 md:grid-cols-2">
+                  <div class="grid gap-2">
+                    <Label>{{ t('appearance') }}</Label>
+                    <div
+                      class="grid w-full grid-cols-3 gap-1 rounded-lg border bg-muted/40 p-1"
+                      role="group"
+                      :aria-label="t('appearance')"
                     >
-                      <Sun class="size-4" />
-                      <span>{{ t('light') }}</span>
-                    </button>
-                    <button
-                      type="button"
-                      :class="themeOptionClass('dark')"
-                      :aria-pressed="themeMode === 'dark'"
-                      @click="setThemeMode('dark')"
+                      <button
+                        type="button"
+                        :class="themeOptionClass('light')"
+                        :aria-pressed="themeMode === 'light'"
+                        @click="setThemeMode('light')"
+                      >
+                        <Sun class="size-4" />
+                        <span>{{ t('light') }}</span>
+                      </button>
+                      <button
+                        type="button"
+                        :class="themeOptionClass('dark')"
+                        :aria-pressed="themeMode === 'dark'"
+                        @click="setThemeMode('dark')"
+                      >
+                        <Moon class="size-4" />
+                        <span>{{ t('dark') }}</span>
+                      </button>
+                      <button
+                        type="button"
+                        :class="themeOptionClass('system')"
+                        :aria-pressed="themeMode === 'system'"
+                        @click="setThemeMode('system')"
+                      >
+                        <Monitor class="size-4" />
+                        <span>{{ t('system') }}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="grid gap-2">
+                    <Label>{{ t('language') }}</Label>
+                    <div
+                      class="grid w-full grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1"
+                      role="group"
+                      :aria-label="t('language')"
                     >
-                      <Moon class="size-4" />
-                      <span>{{ t('dark') }}</span>
-                    </button>
-                    <button
-                      type="button"
-                      :class="themeOptionClass('system')"
-                      :aria-pressed="themeMode === 'system'"
-                      @click="setThemeMode('system')"
-                    >
-                      <Monitor class="size-4" />
-                      <span>{{ t('system') }}</span>
-                    </button>
+                      <button
+                        type="button"
+                        :class="languageOptionClass('zh-CN')"
+                        :aria-pressed="currentLanguage === 'zh-CN'"
+                        @click="setLanguage('zh-CN')"
+                      >
+                        <span>{{ t('chinese') }}</span>
+                      </button>
+                      <button
+                        type="button"
+                        :class="languageOptionClass('en')"
+                        :aria-pressed="currentLanguage === 'en'"
+                        @click="setLanguage('en')"
+                      >
+                        <span>{{ t('english') }}</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
-                <div class="grid gap-2">
-                  <Label>{{ t('language') }}</Label>
-                  <div
-                    class="grid w-full grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1"
-                    role="group"
-                    :aria-label="t('language')"
-                  >
-                    <button
-                      type="button"
-                      :class="languageOptionClass('zh-CN')"
-                      :aria-pressed="currentLanguage === 'zh-CN'"
-                      @click="setLanguage('zh-CN')"
-                    >
-                      <span>{{ t('chinese') }}</span>
-                    </button>
-                    <button
-                      type="button"
-                      :class="languageOptionClass('en')"
-                      :aria-pressed="currentLanguage === 'en'"
-                      @click="setLanguage('en')"
-                    >
-                      <span>{{ t('english') }}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
 
-              <CliIntegrationRow
-                v-if="cliIntegrationStatus"
-                :status="cliIntegrationStatus"
-                :loading="changingCliIntegration"
-                @install="changeCliIntegration('install')"
-                @uninstall="changeCliIntegration('uninstall')"
-              />
+                <CliIntegrationRow
+                  v-if="cliIntegrationStatus"
+                  :status="cliIntegrationStatus"
+                  :loading="changingCliIntegration"
+                  @install="changeCliIntegration('install')"
+                  @uninstall="changeCliIntegration('uninstall')"
+                />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="remote" class="mt-2">
           <Card>
-            <CardContent class="grid gap-5 pt-6">
+            <CardContent data-tour="remote-settings" class="grid gap-5 pt-6">
               <div class="flex items-center justify-between gap-3">
                 <Label for="remote-enabled">{{ t('enableRemoteTasks') }}</Label>
                 <Switch id="remote-enabled" v-model="config.remote.enabled" />
@@ -1552,7 +1567,7 @@ onBeforeUnmount(() => {
 
         <TabsContent value="website-whitelist" class="mt-2">
           <Card>
-            <CardContent class="grid gap-4 pt-6">
+            <CardContent data-tour="website-whitelist" class="grid gap-4 pt-6">
               <form class="flex items-start gap-2" @submit.prevent="addOrigin">
                 <div class="grid flex-1 gap-1">
                   <Input
@@ -1597,7 +1612,7 @@ onBeforeUnmount(() => {
 
         <TabsContent value="ip-whitelist" class="mt-2">
           <Card>
-            <CardContent class="grid gap-4 pt-6">
+            <CardContent data-tour="ip-whitelist" class="grid gap-4 pt-6">
               <form class="flex items-start gap-2" @submit.prevent="addAllowedIp">
                 <div class="grid flex-1 gap-1">
                   <Input
@@ -1637,7 +1652,7 @@ onBeforeUnmount(() => {
         </TabsContent>
 
         <TabsContent value="updates" class="mt-2">
-          <div>
+          <div data-tour="about">
             <Card>
               <CardContent class="grid gap-5 p-5">
                 <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
@@ -1653,6 +1668,10 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="flex flex-wrap gap-2 md:shrink-0 md:flex-nowrap md:justify-end">
+                    <Button variant="outline" @click="replayOnboarding">
+                      <CircleHelp class="size-4" />
+                      {{ t('replayOnboarding') }}
+                    </Button>
                     <Button variant="outline" @click="openGitHubRepository">
                       <ExternalLink class="size-4" />
                       GitHub
@@ -1731,7 +1750,7 @@ onBeforeUnmount(() => {
         </TabsContent>
 
         <TabsContent value="logs" class="mt-2">
-          <Card>
+          <Card data-tour="task-history">
             <CardHeader class="flex flex-row items-center justify-between pb-3">
               <CardTitle class="text-base"> {{ t('printTasks') }} </CardTitle>
               <div class="flex items-center gap-2">
