@@ -20,6 +20,31 @@ PrintBridge 是一个运行在用户电脑上的本地打印代理程序。它�
 
 它不替代打印机驱动，也不绕过系统打印队列。PrintBridge 负责接收任务、校验来源、下载或转换文件，并把任务提交给本机操作系统；真正的出纸仍由系统打印队列、打印机驱动和打印机完成。
 
+## 核心能力
+
+- 桌面端系统托盘常驻，默认隐藏主窗口
+- 支持 Windows、macOS、Linux。Linux headless
+- 本地 WebSocket 服务与进程内管理 IPC
+- 网站白名单（Origin 白名单），用于限制哪些 Web 页面可以连接本机服务，例如 `https://example.com`
+- IP 白名单，用于限制哪些客户端地址可以访问本机服务，支持单个 IP 和 CIDR 网段
+- 支持 PDF、PNG/JPEG 图片和 Office(.docx/.xlsx/.pptx) 文件
+- 支持 HTML 页面：`html` 使用 URL，`raw-html` 使用内联 HTML 文本
+- 支持原始打印指令 (Raw Commands)，原样提交 ESC/POS、TSPL、ZPL、EPL、PCL 等设备指令
+- 每个任务可指定打印机和纸张尺寸；不指定时使用设置里的默认值。
+- 串行打印队列，避免同一台打印机并发抢占
+- 远程任务轮询，适合工位、门店、仓库终端自动拉取打印任务
+- CLI 运维模式，可在不打开 GUI 时查看和修改本机配置
+- 打印机枚举、纸张枚举、配置持久化和最近任务日志
+- 配置可加密导出和导入，便于批量部署工位
+- Desktop 支持 Tauri 在线更新；Headless 支持通过 APT/RPM 软件仓库更新
+
+## 适合场景
+
+- 仓库、门店、工位电脑常驻一个本地打印代理
+- Web ERP、WMS、OMS、收银系统需要直接下发本机打印
+- 标签、面单、小票、拣货单、发货单等需要减少人工选择打印机
+- 业务服务器集中生成任务，本机代理定时拉取并回报打印状态
+
 <a id="quick-start"></a>
 
 ## 🚀 快速开始
@@ -53,31 +78,6 @@ console.log(accepted.jobId, accepted.status);
 ```
 
 `print()` 返回 `queued` 只表示任务已经进入 PrintBridge 队列。下载、转换和提交系统打印队列等后续结果通过 `status` 事件返回。完整用法见 [JSSDK 文档](https://github.com/vergil-lai/print-bridge-jssdk#readme)。
-
-## 适合场景
-
-- 仓库、门店、工位电脑常驻一个本地打印代理
-- Web ERP、WMS、OMS、收银系统需要直接下发本机打印
-- 标签、面单、小票、拣货单、发货单等需要减少人工选择打印机
-- 业务服务器集中生成任务，本机代理定时拉取并回报打印状态
-
-## 核心能力
-
-- 桌面端系统托盘常驻，默认隐藏主窗口
-- 支持 Windows、macOS、Linux。Linux headless
-- 本地 WebSocket 服务与进程内管理 IPC
-- 网站白名单（Origin 白名单），用于限制哪些 Web 页面可以连接本机服务，例如 `https://example.com`
-- IP 白名单，用于限制哪些客户端地址可以访问本机服务，支持单个 IP 和 CIDR 网段
-- 支持 PDF、PNG/JPEG 图片和 Office(.docx/.xlsx/.pptx) 文件
-- 支持 HTML 页面：`html` 使用 URL，`raw-html` 使用内联 HTML 文本
-- 支持原始打印指令 (Raw Commands)，原样提交 ESC/POS、TSPL、ZPL、EPL、PCL 等设备指令
-- 每个任务可指定打印机和纸张尺寸；不指定时使用设置里的默认值。
-- 串行打印队列，避免同一台打印机并发抢占
-- 远程任务轮询，适合工位、门店、仓库终端自动拉取打印任务
-- CLI 运维模式，可在不打开 GUI 时查看和修改本机配置
-- 打印机枚举、纸张枚举、配置持久化和最近任务日志
-- 配置可加密导出和导入，便于批量部署工位
-- Desktop 支持 Tauri 在线更新；Headless 支持通过 APT/RPM 软件仓库更新
 
 ## 桌面版截图
 

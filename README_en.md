@@ -20,6 +20,31 @@ PrintBridge is a local print agent that runs on the user's computer. It lets tru
 
 PrintBridge does not replace printer drivers and does not bypass the operating system print queue. It receives print tasks, validates the source, downloads or converts files when needed, and submits jobs to the local operating system. The actual output is still handled by the system print queue, printer driver, and printer hardware.
 
+## Features
+
+- Desktop runs in the system tray and hides the main window by default
+- Supports Windows, macOS, and Linux, including Linux headless
+- Local WebSocket service and process-local management IPC
+- Website allowlist (Origin allowlist) to control which web pages may connect, for example `https://example.com`
+- IP allowlist to control which client addresses may access the local service, with single IP and CIDR support
+- Supports PDF, PNG/JPEG images, and Office(.docx/.xlsx/.pptx) files
+- Supports HTML pages: `html` uses a URL and `raw-html` uses inline HTML text
+- Supports raw printer commands and submits ESC/POS, TSPL, ZPL, EPL, PCL, and similar device commands as-is
+- Allows each task to specify a printer; falls back to the configured default printer when omitted
+- Uses a serial print queue to avoid concurrent jobs competing for the same printer
+- Remote task polling for workstations, stores, and warehouse terminals
+- CLI operations mode for viewing and updating local configuration without opening the GUI
+- Printer discovery, paper discovery, persistent configuration, and recent task history
+- Encrypted configuration export/import for workstation rollout
+- Tauri online updates for Desktop; Headless updates are available through APT/RPM repositories
+
+## Use Cases
+
+- Keep a local print agent running on warehouse, store, or workstation computers
+- Print directly from Web ERP, WMS, OMS, or POS systems
+- Reduce manual printer selection for labels, shipping documents, picking lists, and receipts
+- Let a business server create print tasks while local agents poll tasks and report status
+
 <a id="quick-start"></a>
 
 ## 🚀 Quick Start
@@ -53,31 +78,6 @@ console.log(accepted.jobId, accepted.status);
 ```
 
 A `queued` response from `print()` only means that the job has entered the PrintBridge queue. Later download, conversion, and system-queue results are delivered through `status` events. See the [JSSDK documentation](https://github.com/vergil-lai/print-bridge-jssdk#readme) for the complete API.
-
-## Use Cases
-
-- Keep a local print agent running on warehouse, store, or workstation computers
-- Print directly from Web ERP, WMS, OMS, or POS systems
-- Reduce manual printer selection for labels, shipping documents, picking lists, and receipts
-- Let a business server create print tasks while local agents poll tasks and report status
-
-## Features
-
-- Desktop runs in the system tray and hides the main window by default
-- Supports Windows, macOS, and Linux, including Linux headless
-- Local WebSocket service and process-local management IPC
-- Website allowlist (Origin allowlist) to control which web pages may connect, for example `https://example.com`
-- IP allowlist to control which client addresses may access the local service, with single IP and CIDR support
-- Supports PDF, PNG/JPEG images, and Office(.docx/.xlsx/.pptx) files
-- Supports HTML pages: `html` uses a URL and `raw-html` uses inline HTML text
-- Supports raw printer commands and submits ESC/POS, TSPL, ZPL, EPL, PCL, and similar device commands as-is
-- Allows each task to specify a printer; falls back to the configured default printer when omitted
-- Uses a serial print queue to avoid concurrent jobs competing for the same printer
-- Remote task polling for workstations, stores, and warehouse terminals
-- CLI operations mode for viewing and updating local configuration without opening the GUI
-- Printer discovery, paper discovery, persistent configuration, and recent task history
-- Encrypted configuration export/import for workstation rollout
-- Tauri online updates for Desktop; Headless updates are available through APT/RPM repositories
 
 ## Desktop Screenshots
 
