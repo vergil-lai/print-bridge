@@ -1,14 +1,57 @@
-# PrintBridge
+<p align="center">
+  <img src="apps/desktop/src-tauri/icons/icon.png" alt="PrintBridge icon" width="96">
+</p>
+
+<h1 align="center">PrintBridge</h1>
 
 <div align="center">
 
-[中文](./README.md) | [Live Demo](https://printbridge.pages.dev/demo.html) | [Website](https://printbridge.pages.dev/)
+[Website](https://printbridge.pages.dev/) | [Live Demo](https://printbridge.pages.dev/demo.html) | [Download](#installation) | [Quick Start](#quick-start) | [Technical Documentation](docs/printbridge-technical_en.md) | [JS SDK](https://github.com/vergil-lai/print-bridge-jssdk) | [中文](./README.md)
 
 </div>
+
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0 License"></a>
+  <a href="https://github.com/vergil-lai/print-bridge/releases/latest"><img src="https://img.shields.io/github/v/release/vergil-lai/print-bridge?display_name=tag&amp;sort=semver" alt="Latest Release"></a>
+  <a href="https://github.com/vergil-lai/print-bridge/releases"><img src="https://img.shields.io/github/downloads/vergil-lai/print-bridge/total" alt="Downloads"></a>
+  <a href="https://github.com/vergil-lai/print-bridge/actions/workflows/pr-checks.yml"><img src="https://github.com/vergil-lai/print-bridge/actions/workflows/pr-checks.yml/badge.svg?event=pull_request" alt="PR Checks"></a>
+</p>
 
 PrintBridge is a local print agent that runs on the user's computer. It lets trusted web pages or remote business servers send PDF files, images, Office files, and raw printer commands to the local system print queue. It is designed for labels, shipping documents, receipts, reports, and other business scenarios that need reliable silent printing.
 
 PrintBridge does not replace printer drivers and does not bypass the operating system print queue. It receives print tasks, validates the source, downloads or converts files when needed, and submits jobs to the local operating system. The actual output is still handled by the system print queue, printer driver, and printer hardware.
+
+## 🚀 Quick Start
+
+1. Download and install PrintBridge from [Releases](https://github.com/vergil-lai/print-bridge/releases/latest), or choose one of the [platform-specific installation methods](#installation) below.
+2. Start PrintBridge, select the default printer and paper size, and add your business system's Origin to the website allowlist.
+3. Install [`print-bridge-sdk`](https://github.com/vergil-lai/print-bridge-jssdk) in your business application:
+
+```bash
+pnpm add print-bridge-sdk
+```
+
+Connect to the local Agent and submit your first PDF print job:
+
+```ts
+import { PrintBridgeClient } from "print-bridge-sdk";
+
+const client = new PrintBridgeClient();
+
+client.on("status", (event) => {
+  console.log(event.jobId, event.status, event.message);
+});
+
+await client.connect();
+const accepted = await client.print({
+  type: "pdf",
+  fileUrl: "https://example.com/label.pdf",
+});
+
+console.log(accepted.jobId, accepted.status);
+```
+
+A `queued` response from `print()` only means that the job has entered the PrintBridge queue. Later download, conversion, and system-queue results are delivered through `status` events. See the [JSSDK documentation](https://github.com/vergil-lai/print-bridge-jssdk#readme) for the complete API.
 
 ## Use Cases
 
@@ -35,11 +78,39 @@ PrintBridge does not replace printer drivers and does not bypass the operating s
 - Encrypted configuration export/import for workstation rollout
 - Tauri online updates for Desktop; Headless updates are available through APT/RPM repositories
 
+## Desktop Screenshots
+
+<p>
+  <img src="screenshots/1.png" alt="PrintBridge default printer and paper settings" width="49%">
+  <img src="screenshots/5.png" alt="PrintBridge print task history" width="49%">
+</p>
+
+<details>
+<summary>View more screenshots</summary>
+
+<p>
+  <img src="screenshots/2.png" alt="PrintBridge remote task settings" width="49%">
+  <img src="screenshots/3.png" alt="PrintBridge website Origin allowlist" width="49%">
+</p>
+
+<p>
+  <img src="screenshots/4.png" alt="PrintBridge IP allowlist" width="49%">
+  <img src="screenshots/6.png" alt="PrintBridge encrypted configuration export" width="49%">
+</p>
+
+</details>
+
 ## Difference From Traditional Web Printing Controls
 
 PrintBridge is not a traditional Web printing control. Products such as [C-Lodop / Lodop](https://www.lodop.net/) are better suited for print design, form printing, tables, barcodes, and printing page content. PrintBridge focuses on being an open-source local print agent for remote task polling, raw printer commands, CLI operations, and private integration.
 
 If your business system already generates PDF files, images, Office files, or device commands such as ESC/POS, TSPL, ZPL, EPL, and PCL, PrintBridge acts as a stable, auditable, and customizable bridge to the local print queue.
+
+## Layered Security Boundaries
+
+- **Origin and IP allowlists**: Restrict unauthorized websites and clients from accessing the local service.
+- **Encrypted configuration export**: Encrypt and package allowlists, the default printer, and other settings for rollout across multiple terminals.
+- **Resource access restrictions**: Block print resources from accessing local and private-network addresses to reduce SSRF risk.
 
 ## Remote Task Polling
 
@@ -93,23 +164,6 @@ HTML rendering does not bundle a browser. Every platform and runtime mode requir
 
 Both the GUI and the systemd-managed Linux headless product follow this requirement. Without a usable browser, an HTML task fails with renderer-unavailable (`RendererUnavailable`).
 
-## Desktop Screenshots
-
-<p>
-  <img src="screenshots/1.png" alt="Desktop Screenshot 1" width="49%">
-  <img src="screenshots/2.png" alt="Desktop Screenshot 2" width="49%">
-</p>
-
-<p>
-  <img src="screenshots/3.png" alt="Desktop Screenshot 3" width="49%">
-  <img src="screenshots/4.png" alt="Desktop Screenshot 4" width="49%">
-</p>
-
-<p>
-  <img src="screenshots/5.png" alt="Desktop Screenshot 5" width="49%">
-  <img src="screenshots/6.png" alt="Desktop Screenshot 6" width="49%">
-</p>
-
 ## Installation
 
 Download the latest version from [Releases](https://github.com/vergil-lai/print-bridge/releases).
@@ -144,7 +198,8 @@ brew tap vergil-lai/tap
 brew install --cask printbridge
 ```
 
-### APT (Debian/Ubuntu)
+<details>
+<summary><strong>APT (Debian/Ubuntu)</strong></summary>
 
 Add the PrintBridge repository and signing key before the first installation:
 
@@ -180,7 +235,10 @@ sudo apt install print-bridge-server
 
 The repository signing key fingerprint is `7D9F6986BAD473CE95B1FDA55B1B363C885CD16D`.
 
-### RPM/DNF (Fedora/RHEL/Rocky Linux/AlmaLinux)
+</details>
+
+<details>
+<summary><strong>RPM/DNF (Fedora/RHEL/Rocky Linux/AlmaLinux)</strong></summary>
 
 Add the PrintBridge repository before the first installation:
 
@@ -205,7 +263,10 @@ sudo dnf install print-bridge-server
 
 When the repository is refreshed for the first time, DNF prompts you to import the PrintBridge GPG key. Its fingerprint is also `7D9F6986BAD473CE95B1FDA55B1B363C885CD16D`.
 
-### Updating
+</details>
+
+<details>
+<summary><strong>Updating</strong></summary>
 
 For Homebrew installations:
 
@@ -233,9 +294,14 @@ sudo dnf upgrade --refresh
 
 Desktop versions installed from Releases can use the built-in updater in Settings. PrintBridge does not provide a separate `print-bridge update` command.
 
+</details>
+
 Desktop and Headless both install the `print-bridge` command, but they are mutually exclusive products and cannot be installed on the same machine. Linux Headless is intended for servers without a desktop, Raspberry Pi devices, industrial computers, and dedicated print hosts. Installing its deb/rpm creates the `printbridge` system user and enables the systemd system service automatically.
 
 The Desktop Settings tab shows command-line tool status: macOS can create `/usr/local/bin/print-bridge` after administrator authorization; Windows can add the directory containing the separate console CLI to the current user's `PATH`, after which the terminal must be reopened; Linux deb/rpm already provides `/usr/bin/print-bridge`, so no management buttons are shown; AppImage can create the user-level `~/.local/bin/print-bridge` link, and users must add that directory to `PATH` themselves when necessary.
+
+<details>
+<summary><strong>Office file conversion requirements</strong></summary>
 
 Printing Office files also requires locally installed conversion software:
 
@@ -245,6 +311,8 @@ Printing Office files also requires locally installed conversion software:
 
 PrintBridge does not bundle an Office converter. The Office print job fails when the required software is unavailable, conversion fails, or conversion exceeds 120 seconds.
 When a Windows conversion times out, PrintBridge only cleans up the Office instance started for that task; it does not close Word, Excel, or PowerPoint sessions already opened by the user.
+
+</details>
 
 ### Initial Desktop Configuration
 
@@ -344,6 +412,16 @@ For protocol details, APIs, configuration format, development commands, and plat
 - [Technical documentation](docs/printbridge-technical_en.md)
 - [Remote task server examples](examples/remote-task/README.md)
 - [JS SDK](https://github.com/vergil-lai/print-bridge-jssdk)
+
+## Support and Feedback
+
+If PrintBridge has helped you, consider [giving the project a Star](https://github.com/vergil-lai/print-bridge) ⭐️. Your support might make the author spin around with excitement 🥳 and provide more motivation to fix bugs and build new features.
+
+If you encounter a problem or have an improvement to suggest, feel free to open an [Issue](https://github.com/vergil-lai/print-bridge/issues).
+
+### ❤️ Acknowledgements
+
+Thank you to everyone who uses, tests, and contributes code to PrintBridge. The open-source journey is a long one, but your support makes it a warmer one.
 
 ## License
 

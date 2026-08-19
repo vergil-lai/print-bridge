@@ -1,14 +1,57 @@
-# PrintBridge
+<p align="center">
+  <img src="apps/desktop/src-tauri/icons/icon.png" alt="PrintBridge 图标" width="96">
+</p>
+
+<h1 align="center">PrintBridge</h1>
 
 <div align="center">
 
-[English](./README_en.md) | [在线示例](https://printbridge.pages.dev/zh-CN/demo.html) | [网站](https://printbridge.pages.dev/zh-CN/)
+[网站](https://printbridge.pages.dev/zh-CN/) | [在线示例](https://printbridge.pages.dev/zh-CN/demo.html) | [下载](#安装) | [快速开始](#快速开始) | [技术文档](docs/printbridge-technical.md) | [JS SDK](https://github.com/vergil-lai/print-bridge-jssdk) | [English](./README_en.md)
 
 </div>
+
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0 License"></a>
+  <a href="https://github.com/vergil-lai/print-bridge/releases/latest"><img src="https://img.shields.io/github/v/release/vergil-lai/print-bridge?display_name=tag&amp;sort=semver" alt="Latest Release"></a>
+  <a href="https://github.com/vergil-lai/print-bridge/releases"><img src="https://img.shields.io/github/downloads/vergil-lai/print-bridge/total" alt="Downloads"></a>
+  <a href="https://github.com/vergil-lai/print-bridge/actions/workflows/pr-checks.yml"><img src="https://github.com/vergil-lai/print-bridge/actions/workflows/pr-checks.yml/badge.svg?event=pull_request" alt="PR Checks"></a>
+</p>
 
 PrintBridge 是一个运行在用户电脑上的本地打印代理程序。它让受信任的 Web 页面或远程业务服务器，把 PDF、图片、Office 文件和原始打印指令发送到本机打印队列，用于标签、面单、小票、报表等需要稳定静默打印的业务场景。
 
 它不替代打印机驱动，也不绕过系统打印队列。PrintBridge 负责接收任务、校验来源、下载或转换文件，并把任务提交给本机操作系统；真正的出纸仍由系统打印队列、打印机驱动和打印机完成。
+
+## 🚀 快速开始
+
+1. 从 [Releases](https://github.com/vergil-lai/print-bridge/releases/latest) 下载并安装 PrintBridge，也可以选择下方的[平台安装方式](#安装)。
+2. 启动 PrintBridge，选择默认打印机和纸张，并把业务系统的 Origin 加入网站白名单。
+3. 在业务系统中安装 [`print-bridge-sdk`](https://github.com/vergil-lai/print-bridge-jssdk)：
+
+```bash
+pnpm add print-bridge-sdk
+```
+
+连接本机 Agent 并发送第一个 PDF 打印任务：
+
+```ts
+import { PrintBridgeClient } from "print-bridge-sdk";
+
+const client = new PrintBridgeClient();
+
+client.on("status", (event) => {
+  console.log(event.jobId, event.status, event.message);
+});
+
+await client.connect();
+const accepted = await client.print({
+  type: "pdf",
+  fileUrl: "https://example.com/label.pdf",
+});
+
+console.log(accepted.jobId, accepted.status);
+```
+
+`print()` 返回 `queued` 只表示任务已经进入 PrintBridge 队列。下载、转换和提交系统打印队列等后续结果通过 `status` 事件返回。完整用法见 [JSSDK 文档](https://github.com/vergil-lai/print-bridge-jssdk#readme)。
 
 ## 适合场景
 
@@ -35,11 +78,39 @@ PrintBridge 是一个运行在用户电脑上的本地打印代理程序。它�
 - 配置可加密导出和导入，便于批量部署工位
 - Desktop 支持 Tauri 在线更新；Headless 支持通过 APT/RPM 软件仓库更新
 
+## 桌面版截图
+
+<p>
+  <img src="screenshots/1.png" alt="PrintBridge 默认打印机与纸张设置" width="49%">
+  <img src="screenshots/5.png" alt="PrintBridge 打印任务记录" width="49%">
+</p>
+
+<details>
+<summary>查看更多截图</summary>
+
+<p>
+  <img src="screenshots/2.png" alt="PrintBridge 远程任务配置" width="49%">
+  <img src="screenshots/3.png" alt="PrintBridge 网站 Origin 白名单" width="49%">
+</p>
+
+<p>
+  <img src="screenshots/4.png" alt="PrintBridge IP 白名单" width="49%">
+  <img src="screenshots/6.png" alt="PrintBridge 加密导出配置" width="49%">
+</p>
+
+</details>
+
 ## 和传统 Web 打印控件的区别
 
-PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https://www.lodop.ne) 更擅长打印设计、套打、表格、条码和页面内容打印；PrintBridge 更关注开源本地打印代理、远程任务轮询、原始打印指令（Raw Commands）、CLI 运维和可私有化集成。
+PrintBridge 不是传统意义上的 Web 打印控件。[C-Lodop / Lodop](https://www.lodop.net/) 更擅长打印设计、套打、表格、条码和页面内容打印；PrintBridge 更关注开源本地打印代理、远程任务轮询、原始打印指令（Raw Commands）、CLI 运维和可私有化集成。
 
 如果业务系统已经生成好 PDF、图片、Office 文件或 ESC/POS、TSPL、ZPL、EPL、PCL 等设备指令，PrintBridge 会更像一个稳定、可审计、可改造的本机打印桥接层。
+
+## 🛡️ 多层安全边界
+
+- **Origin + IP 双重白名单**：限制未经授权的网站和客户端访问本机服务。
+- **配置加密导出**：将白名单、默认打印机等配置加密打包，便于批量部署多台终端。
+- **资源访问限制**：阻止打印资源访问本机及私网地址，降低 SSRF 风险。
 
 ## 远程任务轮询
 
@@ -93,23 +164,6 @@ HTML 渲染不内置浏览器，所有平台和运行模式都必须使用已安
 
 GUI 和 systemd 托管的 Linux headless 产品都遵循此要求；没有可用浏览器时，HTML 任务会以 renderer-unavailable（`RendererUnavailable`）失败。
 
-## 桌面版截图
-
-<p>
-  <img src="screenshots/1.png" alt="桌面版截图 1" width="49%">
-  <img src="screenshots/2.png" alt="桌面版截图 2" width="49%">
-</p>
-
-<p>
-  <img src="screenshots/3.png" alt="桌面版截图 3" width="49%">
-  <img src="screenshots/4.png" alt="桌面版截图 4" width="49%">
-</p>
-
-<p>
-  <img src="screenshots/5.png" alt="桌面版截图 5" width="49%">
-  <img src="screenshots/6.png" alt="桌面版截图 6" width="49%">
-</p>
-
 ## 安装
 
 在 [Releases](https://github.com/vergil-lai/print-bridge/releases) 下载最新版本。
@@ -144,7 +198,8 @@ brew tap vergil-lai/tap
 brew install --cask printbridge
 ```
 
-### APT（Debian/Ubuntu）
+<details>
+<summary><strong>APT（Debian/Ubuntu）</strong></summary>
 
 首次安装时添加 PrintBridge 软件源和签名公钥：
 
@@ -180,7 +235,10 @@ sudo apt install print-bridge-server
 
 仓库签名公钥指纹为 `7D9F6986BAD473CE95B1FDA55B1B363C885CD16D`。
 
-### RPM/DNF（Fedora/RHEL/Rocky Linux/AlmaLinux）
+</details>
+
+<details>
+<summary><strong>RPM/DNF（Fedora/RHEL/Rocky Linux/AlmaLinux）</strong></summary>
 
 首次安装时添加 PrintBridge 软件源：
 
@@ -205,7 +263,10 @@ sudo dnf install print-bridge-server
 
 首次刷新仓库时，DNF 会要求确认导入 PrintBridge GPG 公钥。公钥指纹同样为 `7D9F6986BAD473CE95B1FDA55B1B363C885CD16D`。
 
-### 更新
+</details>
+
+<details>
+<summary><strong>更新方式</strong></summary>
 
 通过 Homebrew 安装时：
 
@@ -233,9 +294,14 @@ sudo dnf upgrade --refresh
 
 通过 Releases 安装的 Desktop 版本可使用设置页中的内置更新功能。PrintBridge 不提供单独的 `print-bridge update` 命令。
 
+</details>
+
 Desktop 和 Headless 都安装同名的 `print-bridge` 命令，但属于互斥产品，不能在同一台机器上同时安装。Linux Headless 适合无桌面的服务器、树莓派、工控机和专用打印主机；安装 deb/rpm 后会自动创建 `printbridge` 系统用户并启用 systemd system service。
 
 Desktop 的“设置”页会显示命令行工具状态：macOS 可授权创建 `/usr/local/bin/print-bridge`；Windows 可把包含独立 console CLI 的安装目录加入当前用户 `PATH`，操作后需要重新打开终端；Linux deb/rpm 已自动提供 `/usr/bin/print-bridge`，因此不显示管理按钮；AppImage 可创建 `~/.local/bin/print-bridge` 用户级链接，如果该目录不在 `PATH` 中，需由用户自行加入。
+
+<details>
+<summary><strong>Office 文件转换要求</strong></summary>
 
 如果需要打印 Office 文件，还必须安装本机转换软件：
 
@@ -245,6 +311,8 @@ Desktop 的“设置”页会显示命令行工具状态：macOS 可授权创建
 
 PrintBridge 不内置 Office 转换器。缺少对应软件、转换失败或转换超过 120 秒时，该 Office 打印任务会失败。
 Windows 发生转换超时时，只会清理该任务启动的 Office 实例，不会关闭用户已经打开的 Word、Excel 或 PowerPoint。
+
+</details>
 
 ### Desktop 首次配置
 
@@ -344,6 +412,16 @@ PrintBridge 运行在用户本机，能够访问本机打印机。部署时请�
 - [技术说明](docs/printbridge-technical.md)
 - [远程任务服务器示例](examples/remote-task/README.md)
 - [JS SDK](https://github.com/vergil-lai/print-bridge-jssdk)
+
+## 支持与反馈
+
+如果 PrintBridge 帮到了你，欢迎[给项目一个 Star](https://github.com/vergil-lai/print-bridge) ⭐️。你的支持会让作者兴奋到原地转圈 🥳，也会带来更多修复 Bug 和开发新功能的动力。
+
+如果你在使用中遇到问题或有改进建议，欢迎提交 [Issue](https://github.com/vergil-lai/print-bridge/issues)。
+
+### ❤️ 致谢
+
+感谢所有使用、测试、贡献代码的朋友。开源的路很长，但你们的支持让它变得温暖。
 
 ## License
 
