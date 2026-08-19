@@ -6,7 +6,7 @@
 
 <div align="center">
 
-[网站](https://printbridge.pages.dev/zh-CN/) | [在线示例](https://printbridge.pages.dev/zh-CN/demo.html) | [下载](#安装) | [快速开始](#快速开始) | [技术文档](docs/printbridge-technical.md) | [JS SDK](https://github.com/vergil-lai/print-bridge-jssdk) | [English](./README_en.md)
+[网站](https://printbridge.pages.dev/zh-CN/) | [在线示例](https://printbridge.pages.dev/zh-CN/demo.html) | [下载](#安装) | [快速开始](#quick-start) | [技术文档](docs/printbridge-technical.md) | [JS SDK](https://github.com/vergil-lai/print-bridge-jssdk) | [English](./README_en.md)
 
 </div>
 
@@ -14,12 +14,13 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0 License"></a>
   <a href="https://github.com/vergil-lai/print-bridge/releases/latest"><img src="https://img.shields.io/github/v/release/vergil-lai/print-bridge?display_name=tag&amp;sort=semver" alt="Latest Release"></a>
   <a href="https://github.com/vergil-lai/print-bridge/releases"><img src="https://img.shields.io/github/downloads/vergil-lai/print-bridge/total" alt="Downloads"></a>
-  <a href="https://github.com/vergil-lai/print-bridge/actions/workflows/pr-checks.yml"><img src="https://github.com/vergil-lai/print-bridge/actions/workflows/pr-checks.yml/badge.svg?event=pull_request" alt="PR Checks"></a>
 </p>
 
 PrintBridge 是一个运行在用户电脑上的本地打印代理程序。它让受信任的 Web 页面或远程业务服务器，把 PDF、图片、Office 文件和原始打印指令发送到本机打印队列，用于标签、面单、小票、报表等需要稳定静默打印的业务场景。
 
 它不替代打印机驱动，也不绕过系统打印队列。PrintBridge 负责接收任务、校验来源、下载或转换文件，并把任务提交给本机操作系统；真正的出纸仍由系统打印队列、打印机驱动和打印机完成。
+
+<a id="quick-start"></a>
 
 ## 🚀 快速开始
 
@@ -28,7 +29,7 @@ PrintBridge 是一个运行在用户电脑上的本地打印代理程序。它�
 3. 在业务系统中安装 [`print-bridge-sdk`](https://github.com/vergil-lai/print-bridge-jssdk)：
 
 ```bash
-pnpm add print-bridge-sdk
+npm install print-bridge-sdk
 ```
 
 连接本机 Agent 并发送第一个 PDF 打印任务：

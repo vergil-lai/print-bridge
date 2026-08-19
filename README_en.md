@@ -14,12 +14,13 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0 License"></a>
   <a href="https://github.com/vergil-lai/print-bridge/releases/latest"><img src="https://img.shields.io/github/v/release/vergil-lai/print-bridge?display_name=tag&amp;sort=semver" alt="Latest Release"></a>
   <a href="https://github.com/vergil-lai/print-bridge/releases"><img src="https://img.shields.io/github/downloads/vergil-lai/print-bridge/total" alt="Downloads"></a>
-  <a href="https://github.com/vergil-lai/print-bridge/actions/workflows/pr-checks.yml"><img src="https://github.com/vergil-lai/print-bridge/actions/workflows/pr-checks.yml/badge.svg?event=pull_request" alt="PR Checks"></a>
 </p>
 
 PrintBridge is a local print agent that runs on the user's computer. It lets trusted web pages or remote business servers send PDF files, images, Office files, and raw printer commands to the local system print queue. It is designed for labels, shipping documents, receipts, reports, and other business scenarios that need reliable silent printing.
 
 PrintBridge does not replace printer drivers and does not bypass the operating system print queue. It receives print tasks, validates the source, downloads or converts files when needed, and submits jobs to the local operating system. The actual output is still handled by the system print queue, printer driver, and printer hardware.
+
+<a id="quick-start"></a>
 
 ## 🚀 Quick Start
 
@@ -28,7 +29,7 @@ PrintBridge does not replace printer drivers and does not bypass the operating s
 3. Install [`print-bridge-sdk`](https://github.com/vergil-lai/print-bridge-jssdk) in your business application:
 
 ```bash
-pnpm add print-bridge-sdk
+npm install print-bridge-sdk
 ```
 
 Connect to the local Agent and submit your first PDF print job:
