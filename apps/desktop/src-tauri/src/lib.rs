@@ -36,6 +36,11 @@ enum RuntimePlatform {
     Other,
 }
 
+#[cfg(target_os = "macos")]
+const fn should_show_main_window_on_reopen(has_visible_windows: bool) -> bool {
+    !has_visible_windows
+}
+
 /// 原生 WebView fallback 已因无法统一证明其资源隔离而禁用。
 #[cfg(test)]
 const fn uses_gui_webview_fallback(mode: RuntimeMode, platform: RuntimePlatform) -> bool {
@@ -61,7 +66,7 @@ fn existing_agent_startup_error(status: agent_guard::AgentPortStatus) -> Option<
 /// 启动 Tauri 应用、本地服务和后台打印 worker。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
@@ -74,6 +79,8 @@ pub fn run() {
             let config_path = app_config_dir.join("config.json");
             let config = AgentConfig::load(&config_path)?;
             tray::setup_tray(app, config.app.language)?;
+            #[cfg(target_os = "macos")]
+            app.set_dock_visibility(false);
             let printing = print_backend(app)?;
             let paths = RuntimePaths::new(
                 config_path,
@@ -104,6 +111,8 @@ pub fn run() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
+                    #[cfg(target_os = "macos")]
+                    let _ = window.app_handle().set_dock_visibility(false);
                 }
             }
         })
@@ -127,8 +136,21 @@ pub fn run() {
             commands::uninstall_cli_integration,
             commands::print_test
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app, _event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } = _event
+        {
+            if should_show_main_window_on_reopen(has_visible_windows) {
+                tray::show_main_window(_app);
+            }
+        }
+    });
 }
 
 /// 从当前进程参数运行 CLI，供独立二进制入口调用。
@@ -157,6 +179,13 @@ fn print_backend(app: &tauri::App) -> tauri::Result<Box<dyn printing::PrintBacke
 mod tests {
     use super::*;
     use crate::agent_guard::{AgentPortStatus, RunningAgent};
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reopen_without_visible_windows_shows_main_window() {
+        assert!(should_show_main_window_on_reopen(false));
+        assert!(!should_show_main_window_on_reopen(true));
+    }
 
     #[test]
     fn gui_runtime_never_uses_webview_fallback() {

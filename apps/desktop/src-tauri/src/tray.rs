@@ -144,7 +144,9 @@ fn test_print(app: &tauri::AppHandle) {
 }
 
 /// 如果主设置窗口存在，则显示并聚焦它。
-fn show_main_window(app: &tauri::AppHandle) {
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_dock_visibility(true);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
