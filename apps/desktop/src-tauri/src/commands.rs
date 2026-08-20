@@ -8,7 +8,7 @@ use crate::{
 };
 use print_bridge_cli::{
     config_transfer::{ExportConfigOptions, ImportPreview},
-    Command, CommandError, CommandResult, CommandService,
+    Command, CommandError, CommandResult, CommandService, DoctorReport, ProductKind,
 };
 use print_bridge_core::printing::{PaperInfo, PrinterInfo};
 use std::{net::TcpListener, path::PathBuf, sync::Arc};
@@ -23,6 +23,27 @@ pub async fn get_config(
     match service.execute(Command::GetConfig).await? {
         CommandResult::Config(config) => Ok(*config),
         _ => unreachable!("GetConfig returned an unexpected result"),
+    }
+}
+
+/// 运行 Desktop 产品的只读本地环境检测。
+#[tauri::command]
+pub async fn run_doctor(
+    service: State<'_, Arc<CommandService>>,
+) -> Result<DoctorReport, CommandError> {
+    run_doctor_with_service(service.inner().as_ref()).await
+}
+
+/// 通过共享命令服务运行 Desktop Doctor，便于绕过 Tauri State 测试。
+async fn run_doctor_with_service(service: &CommandService) -> Result<DoctorReport, CommandError> {
+    match service
+        .execute(Command::Doctor {
+            product: ProductKind::Desktop,
+        })
+        .await?
+    {
+        CommandResult::Doctor(report) => Ok(report),
+        _ => unreachable!("Doctor returned an unexpected result"),
     }
 }
 
@@ -338,8 +359,8 @@ pub async fn list_papers(
 mod tests {
     use super::{
         check_service_port_available_for_host, clear_task_history_for_state,
-        get_task_history_events_for_state, get_task_history_for_state, save_config_for_state,
-        MAX_SERVICE_PORT, MIN_SERVICE_PORT,
+        get_task_history_events_for_state, get_task_history_for_state, run_doctor_with_service,
+        save_config_for_state, MAX_SERVICE_PORT, MIN_SERVICE_PORT,
     };
     use crate::{
         config::AgentConfig,
@@ -350,7 +371,54 @@ mod tests {
             NewTaskHistoryEvent, TaskHistorySource, TaskHistoryStatus, TaskHistoryStore,
         },
     };
-    use std::fs;
+    use async_trait::async_trait;
+    use print_bridge_cli::{
+        Command, CommandError, CommandExecutor, CommandResult, CommandService, DoctorCheck,
+        DoctorReport, DoctorStatus, ProductKind,
+    };
+    use std::{
+        fs,
+        sync::{Arc, Mutex},
+    };
+
+    struct RecordingDoctorExecutor {
+        calls: Arc<Mutex<Vec<Command>>>,
+        report: DoctorReport,
+    }
+
+    #[async_trait]
+    impl CommandExecutor for RecordingDoctorExecutor {
+        async fn execute(&self, command: Command) -> Result<CommandResult, CommandError> {
+            self.calls.lock().unwrap().push(command);
+            Ok(CommandResult::Doctor(self.report.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_doctor_uses_the_shared_desktop_command() {
+        let report = DoctorReport::new(vec![DoctorCheck {
+            code: "service.port".to_string(),
+            status: DoctorStatus::Pass,
+            message: "Service port is active.".to_string(),
+            suggestion: None,
+        }]);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let executor: Arc<dyn CommandExecutor> = Arc::new(RecordingDoctorExecutor {
+            calls: calls.clone(),
+            report: report.clone(),
+        });
+        let service = CommandService::new(Some(executor.clone()), executor);
+
+        let actual = run_doctor_with_service(&service).await.unwrap();
+
+        assert_eq!(actual, report);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![Command::Doctor {
+                product: ProductKind::Desktop,
+            }]
+        );
+    }
 
     #[tokio::test]
     async fn save_config_persists_to_state_config_path() {

@@ -125,6 +125,18 @@ PrintBridge supports raw printer commands. Your business system can generate ESC
 
 This is useful for label printers, receipt printers, and industrial printing devices. PrintBridge does not parse these device languages and does not generate labels, receipts, or RFID commands for you.
 
+## Office File Printing
+
+PrintBridge supports DOCX, XLSX, and PPTX files. Office jobs must provide an HTTP(S) `file_url`; the local Agent downloads the file, converts it to PDF, and then sends it through the printing flow.
+
+Office file printing requires locally installed conversion software:
+
+- Windows: DOCX, XLSX, and PPTX try the matching Microsoft Office, WPS Office, and LibreOffice application in that order. Fallback occurs only when a converter is not installed, COM cannot create a new independently owned instance, or required automation security controls are unavailable. Document-open, conversion, timeout, and PDF-validation failures do not fall back.
+- macOS/Linux: install LibreOffice and make `soffice` or `libreoffice` available to the system.
+- WPS conversion must prove that PrintBridge owns a newly created process; otherwise the next converter is tried. If a single-component WPS installation always reuses an existing user process, a multi-component installation can be tried. PrintBridge never closes an Office/WPS process that was already running for the user.
+
+PrintBridge does not bundle an Office converter. The Office print job fails when the required software is unavailable, conversion fails, or conversion exceeds 120 seconds. When a Windows conversion times out, PrintBridge only cleans up the Office instance started for that task; it does not close Word, Excel, or PowerPoint sessions already opened by the user.
+
 ## HTML Printing
 
 `html` prints an HTML page at a public URL and requires an HTTP(S) `file_url`; `raw-html` prints inline HTML and requires a non-empty `html` field with no `file_url`. Both HTML task types support `wait_ms` (0 to 30000 milliseconds), `copies`, and `paper`:
@@ -301,20 +313,6 @@ Desktop and Headless both install the `print-bridge` command, but they are mutua
 
 The Desktop Settings tab shows command-line tool status: macOS can create `/usr/local/bin/print-bridge` after administrator authorization; Windows can add the directory containing the separate console CLI to the current user's `PATH`, after which the terminal must be reopened; Linux deb/rpm already provides `/usr/bin/print-bridge`, so no management buttons are shown; AppImage can create the user-level `~/.local/bin/print-bridge` link, and users must add that directory to `PATH` themselves when necessary.
 
-<details>
-<summary><strong>Office file conversion requirements</strong></summary>
-
-Printing Office files also requires locally installed conversion software:
-
-- Windows: DOCX, XLSX, and PPTX try the matching Microsoft Office, WPS Office, and LibreOffice application in that order. Fallback occurs only when a converter is not installed, COM cannot create a new independently owned instance, or required automation security controls are unavailable. Document-open, conversion, timeout, and PDF-validation failures do not fall back.
-- macOS/Linux: install LibreOffice and make `soffice` or `libreoffice` available to the system.
-- WPS conversion must prove that PrintBridge owns a newly created process; otherwise the next converter is tried. If a single-component WPS installation always reuses an existing user process, a multi-component installation can be tried. PrintBridge never closes an Office/WPS process that was already running for the user.
-
-PrintBridge does not bundle an Office converter. The Office print job fails when the required software is unavailable, conversion fails, or conversion exceeds 120 seconds.
-When a Windows conversion times out, PrintBridge only cleans up the Office instance started for that task; it does not close Word, Excel, or PowerPoint sessions already opened by the user.
-
-</details>
-
 ### Initial Desktop Configuration
 
 After first launch, configure PrintBridge in the settings UI:
@@ -416,13 +414,9 @@ For protocol details, APIs, configuration format, development commands, and plat
 
 ## Support and Feedback
 
-If PrintBridge has helped you, consider [giving the project a Star](https://github.com/vergil-lai/print-bridge) ⭐️. Your support might make the author spin around with excitement 🥳 and provide more motivation to fix bugs and build new features.
+If PrintBridge has helped you, consider giving the project a Star ⭐️.
 
 If you encounter a problem or have an improvement to suggest, feel free to open an [Issue](https://github.com/vergil-lai/print-bridge/issues).
-
-### ❤️ Acknowledgements
-
-Thank you to everyone who uses, tests, and contributes code to PrintBridge. The open-source journey is a long one, but your support makes it a warmer one.
 
 ## License
 

@@ -19,6 +19,26 @@ export interface CliIntegrationStatus {
   path_ready: boolean;
 }
 
+export type DoctorStatus = 'PASS' | 'WARN' | 'FAIL';
+
+export interface DoctorCheck {
+  code: string;
+  status: DoctorStatus;
+  message: string;
+  suggestion?: string;
+}
+
+export interface DoctorSummary {
+  pass: number;
+  warn: number;
+  fail: number;
+}
+
+export interface DoctorReport {
+  checks: DoctorCheck[];
+  summary: DoctorSummary;
+}
+
 /** Tauri UI 和本地 Agent 共享的完整配置。 */
 export interface AgentConfig {
   service: {

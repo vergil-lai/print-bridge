@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AgentConfig,
   CliIntegrationStatus,
+  DoctorReport,
   ExportConfigOptions,
   ImportPreview,
   PaperInfo,
@@ -14,6 +15,11 @@ import type {
 /** 通过 Tauri 读取已持久化的 Agent 配置。 */
 export function getConfig(): Promise<AgentConfig> {
   return invoke<AgentConfig>('get_config');
+}
+
+/** 运行与 CLI 共用的 Desktop 只读环境检测。 */
+export function runDoctor(): Promise<DoctorReport> {
+  return invoke<DoctorReport>('run_doctor');
 }
 
 /** 通过 Tauri 保存 Agent 配置。 */

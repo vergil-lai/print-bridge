@@ -90,6 +90,7 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import CliIntegrationRow from '@/components/CliIntegrationRow.vue';
+import StatusDoctorSheet from '@/components/StatusDoctorSheet.vue';
 import { DEFAULT_UI_LANGUAGE, isUiLanguage, setI18nLocale, type UiLanguage } from '@/i18n';
 import { useOnboarding } from '@/onboarding';
 
@@ -125,6 +126,8 @@ const DEFAULT_APP_CONFIG: AgentConfig['app'] = {
 
 const config = ref<AgentConfig | null>(null);
 const activeTab = ref('settings');
+const doctorOpen = ref(false);
+const doctorNeedsAttention = ref(false);
 const printers = ref<PrinterInfo[]>([]);
 const papers = ref<PaperInfo[]>([]);
 const taskHistory = ref<TaskHistoryJob[]>([]);
@@ -196,11 +199,15 @@ const hasPendingPortChange = computed(
 /** 顶部状态栏显示的可读状态。 */
 const statusLabel = computed(() => {
   if (loadingConfig.value) return t('loading');
-  if (errorMessage.value) return t('needsAttention');
+  if (errorMessage.value || doctorNeedsAttention.value) return t('needsAttention');
   return t('ready');
 });
 /** 根据当前错误状态计算状态徽标样式。 */
-const statusVariant = computed(() => (errorMessage.value ? 'destructive' : 'secondary'));
+const statusVariant = computed(() => {
+  if (loadingConfig.value) return 'secondary';
+  if (errorMessage.value || doctorNeedsAttention.value) return 'destructive';
+  return 'success';
+});
 /** 仅在需要显式提交的设置页显示保存按钮。 */
 const showsSaveButton = computed(
   () => activeTab.value === 'settings' || activeTab.value === 'remote',
@@ -1178,9 +1185,17 @@ onBeforeUnmount(() => {
           <p class="text-sm text-muted-foreground">{{ t('localPort') }} {{ servicePort || '-' }}</p>
         </div>
         <div data-tour="config-transfer" class="flex flex-wrap items-center gap-2">
-          <Badge :variant="statusVariant">
-            {{ statusLabel }}
-          </Badge>
+          <button
+            type="button"
+            data-testid="status-doctor-trigger"
+            class="rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
+            :aria-label="t('doctor.open')"
+            @click="doctorOpen = true"
+          >
+            <Badge :variant="statusVariant">
+              {{ statusLabel }}
+            </Badge>
+          </button>
           <Button v-if="showsSaveButton" :disabled="!config || saving" @click="persistConfig">
             <Save class="size-4" />
             {{ saving ? t('saving') : t('save') }}
@@ -2057,5 +2072,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    <StatusDoctorSheet v-model:open="doctorOpen" @status-change="doctorNeedsAttention = $event" />
   </main>
 </template>

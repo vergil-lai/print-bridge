@@ -125,6 +125,18 @@ PrintBridge 支持原始打印指令（Raw Commands）。业务系统可以自�
 
 这适合标签机、小票机和工业打印设备。PrintBridge 不解析这些设备语言，也不负责生成标签、小票或 RFID 指令。
 
+## Office 文件打印
+
+PrintBridge 支持 DOCX、XLSX 和 PPTX 文件。Office 任务必须提供 HTTP(S) `file_url`；本机 Agent 下载文件并转换为 PDF 后，再进入打印流程。
+
+Office 文件打印依赖本机安装的转换软件：
+
+- Windows：DOCX、XLSX、PPTX 会按对应格式依次尝试 Microsoft Office、WPS Office、LibreOffice。仅当当前转换器未安装、COM 无法创建新的独立实例，或必要的自动化安全控制不可用时才回退；文档打开、转换、超时或 PDF 校验失败不会回退。
+- macOS/Linux：需要安装 LibreOffice，并确保系统能够调用 `soffice` 或 `libreoffice`。
+- WPS 转换必须能确认 PrintBridge 拥有一个新建进程；否则会尝试下一个转换器。若单组件 WPS 总是复用已有用户进程，可以尝试安装多组件模式。PrintBridge 不会关闭用户原有的 Office/WPS 进程。
+
+PrintBridge 不内置 Office 转换器。缺少对应软件、转换失败或转换超过 120 秒时，该 Office 打印任务会失败。Windows 发生转换超时时，只会清理该任务启动的 Office 实例，不会关闭用户已经打开的 Word、Excel 或 PowerPoint。
+
 ## HTML 打印
 
 `html` 用于打印公开 URL 指向的 HTML 页面，必须提供 HTTP(S) `file_url`；`raw-html` 用于直接打印内联 HTML，必须提供非空 `html`，且不能提供 `file_url`。两种 HTML 任务都支持 `wait_ms`（0 到 30000 毫秒）、`copies` 和 `paper`：
@@ -301,20 +313,6 @@ Desktop 和 Headless 都安装同名的 `print-bridge` 命令，但属于互斥�
 
 Desktop 的“设置”页会显示命令行工具状态：macOS 可授权创建 `/usr/local/bin/print-bridge`；Windows 可把包含独立 console CLI 的安装目录加入当前用户 `PATH`，操作后需要重新打开终端；Linux deb/rpm 已自动提供 `/usr/bin/print-bridge`，因此不显示管理按钮；AppImage 可创建 `~/.local/bin/print-bridge` 用户级链接，如果该目录不在 `PATH` 中，需由用户自行加入。
 
-<details>
-<summary><strong>Office 文件转换要求</strong></summary>
-
-如果需要打印 Office 文件，还必须安装本机转换软件：
-
-- Windows：DOCX、XLSX、PPTX 会按对应格式依次尝试 Microsoft Office、WPS Office、LibreOffice。仅当当前转换器未安装、COM 无法创建新的独立实例，或必要的自动化安全控制不可用时才回退；文档打开、转换、超时或 PDF 校验失败不会回退。
-- macOS/Linux：需要安装 LibreOffice，并确保系统能够调用 `soffice` 或 `libreoffice`。
-- WPS 转换必须能确认 PrintBridge 拥有一个新建进程；否则会尝试下一个转换器。若单组件 WPS 总是复用已有用户进程，可以尝试安装多组件模式。PrintBridge 不会关闭用户原有的 Office/WPS 进程。
-
-PrintBridge 不内置 Office 转换器。缺少对应软件、转换失败或转换超过 120 秒时，该 Office 打印任务会失败。
-Windows 发生转换超时时，只会清理该任务启动的 Office 实例，不会关闭用户已经打开的 Word、Excel 或 PowerPoint。
-
-</details>
-
 ### Desktop 首次配置
 
 首次运行后，在 PrintBridge 设置界面完成：
@@ -416,13 +414,9 @@ PrintBridge 运行在用户本机，能够访问本机打印机。部署时请�
 
 ## 支持与反馈
 
-如果 PrintBridge 帮到了你，欢迎[给项目一个 Star](https://github.com/vergil-lai/print-bridge) ⭐️。你的支持会让作者兴奋到原地转圈 🥳，也会带来更多修复 Bug 和开发新功能的动力。
+如果 PrintBridge 帮到了你，欢迎给项目一个 Star ⭐️。
 
 如果你在使用中遇到问题或有改进建议，欢迎提交 [Issue](https://github.com/vergil-lai/print-bridge/issues)。
-
-### ❤️ 致谢
-
-感谢所有使用、测试、贡献代码的朋友。开源的路很长，但你们的支持让它变得温暖。
 
 ## License
 
