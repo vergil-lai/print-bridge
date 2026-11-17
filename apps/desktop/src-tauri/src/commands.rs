@@ -47,6 +47,24 @@ async fn run_doctor_with_service(service: &CommandService) -> Result<DoctorRepor
     }
 }
 
+/// 在后台线程收集打印诊断并写入用户指定的报告文件。
+#[tauri::command]
+pub async fn export_diagnostic_report(
+    path: String,
+    state: State<'_, AgentState>,
+) -> Result<(), String> {
+    let printing = state.printing.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        print_bridge_runtime::printing::diagnostics::export_report(
+            std::path::Path::new(&path),
+            printing.as_ref(),
+        )
+        .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// 返回当前运行的桌面应用是否为 debug 构建。
 #[tauri::command]
 pub fn is_debug_build() -> bool {

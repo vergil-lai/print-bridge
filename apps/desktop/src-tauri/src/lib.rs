@@ -128,6 +128,7 @@ pub fn run() {
             commands::get_task_history_events,
             commands::clear_task_history,
             commands::run_doctor,
+            commands::export_diagnostic_report,
             commands::list_printers,
             commands::list_papers,
             commands::is_debug_build,

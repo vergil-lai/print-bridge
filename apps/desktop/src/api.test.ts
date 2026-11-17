@@ -5,11 +5,18 @@ const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 
-import { runDoctor } from '@/api';
+import { exportDiagnosticReport, runDoctor } from '@/api';
 import type { DoctorReport } from '@/types';
 
 describe('runDoctor', () => {
   beforeEach(() => mocks.invoke.mockReset());
+
+  it('passes the chosen diagnostic report path to Tauri', async () => {
+    await exportDiagnosticReport('/tmp/diagnostics.json');
+    expect(mocks.invoke).toHaveBeenCalledWith('export_diagnostic_report', {
+      path: '/tmp/diagnostics.json',
+    });
+  });
 
   it('invokes the Desktop doctor Tauri command without a payload', async () => {
     const report: DoctorReport = {

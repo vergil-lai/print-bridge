@@ -5,8 +5,16 @@ import { i18n, setI18nLocale } from '@/i18n';
 import type { DoctorReport } from '@/types';
 import StatusDoctorSheet from './StatusDoctorSheet.vue';
 
-const mocks = vi.hoisted(() => ({ runDoctor: vi.fn() }));
-vi.mock('@/api', () => ({ runDoctor: mocks.runDoctor }));
+const mocks = vi.hoisted(() => ({
+  runDoctor: vi.fn(),
+  exportDiagnosticReport: vi.fn(),
+  save: vi.fn(),
+}));
+vi.mock('@/api', () => ({
+  runDoctor: mocks.runDoctor,
+  exportDiagnosticReport: mocks.exportDiagnosticReport,
+}));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ save: mocks.save }));
 
 const report = (status: 'PASS' | 'WARN' | 'FAIL', code = 'printing.printers'): DoctorReport => ({
   checks: [{ code, status, message: 'backend English', suggestion: 'backend suggestion' }],
@@ -25,11 +33,43 @@ function lastStatusChange(wrapper: ReturnType<typeof mount>): unknown[] | undefi
 describe('StatusDoctorSheet', () => {
   beforeEach(() => {
     mocks.runDoctor.mockReset();
+    mocks.exportDiagnosticReport.mockReset();
+    mocks.save.mockReset();
     setI18nLocale('zh-CN');
   });
 
   afterEach(() => {
     document.body.innerHTML = '';
+  });
+
+  it('exports to the chosen path, supports cancellation and reports write errors', async () => {
+    mocks.runDoctor.mockResolvedValue(report('PASS'));
+    mount(StatusDoctorSheet, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+      props: { open: true },
+    });
+    await flushPromises();
+    const button = document.querySelector<HTMLButtonElement>('[data-testid="doctor-export"]')!;
+    mocks.save.mockResolvedValueOnce(null);
+    button.click();
+    await flushPromises();
+    expect(mocks.exportDiagnosticReport).not.toHaveBeenCalled();
+    expect(button.disabled).toBe(false);
+
+    mocks.save.mockResolvedValue('/tmp/report.json');
+    mocks.exportDiagnosticReport.mockResolvedValueOnce(undefined);
+    button.click();
+    await flushPromises();
+    expect(mocks.exportDiagnosticReport).toHaveBeenCalledWith('/tmp/report.json');
+    expect(document.body.textContent).toContain('诊断报告已导出。');
+
+    mocks.exportDiagnosticReport.mockRejectedValueOnce(new Error('disk full'));
+    button.click();
+    await flushPromises();
+    expect(document.body.textContent).toContain('诊断报告导出失败，请重试。');
+    expect(document.body.textContent).not.toContain('诊断报告已导出。');
+    expect(button.disabled).toBe(false);
   });
 
   it('runs on open, renders localized warnings, and keeps the app ready', async () => {

@@ -22,6 +22,11 @@ export function runDoctor(): Promise<DoctorReport> {
   return invoke<DoctorReport>('run_doctor');
 }
 
+/** 导出近期打印诊断和当前打印机纸型探测结果。 */
+export function exportDiagnosticReport(path: string): Promise<void> {
+  return invoke<void>('export_diagnostic_report', { path });
+}
+
 /** 通过 Tauri 保存 Agent 配置。 */
 export function saveConfig(config: AgentConfig): Promise<AgentConfig> {
   return invoke<AgentConfig>('save_config', { config });

@@ -18,6 +18,12 @@ export const messages = {
       warnCount: '警告',
       failCount: '失败',
       retry: '重新检测',
+      exportReport: '导出打印诊断报告',
+      exporting: '正在收集并导出...',
+      exported: '诊断报告已导出。',
+      exportFailed: '诊断报告导出失败，请重试。',
+      exportHint:
+        '请先刷新纸张列表并重现打印问题，再在本次运行中导出。报告包含打印机、驱动信息和近期纸型诊断，不包含文档内容或认证配置。重启后近期记录会清空。',
       runFailed: '状态检测失败，请重试。',
       open: '打开状态检测',
       groups: {
@@ -308,6 +314,12 @@ export const messages = {
       warnCount: 'Warnings',
       failCount: 'Failed',
       retry: 'Check again',
+      exportReport: 'Export print diagnostics',
+      exporting: 'Collecting and exporting...',
+      exported: 'Diagnostic report exported.',
+      exportFailed: 'Could not export diagnostics. Try again.',
+      exportHint:
+        'Refresh paper sizes and reproduce the print issue, then export during the same session. Includes printer, driver and recent paper diagnostics, without document contents or authentication settings. Recent events are cleared on restart.',
       runFailed: 'Status check failed. Try again.',
       open: 'Open status check',
       groups: {

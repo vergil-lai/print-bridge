@@ -5,6 +5,7 @@ pub use print_bridge_core::printing::{
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod cups;
+pub mod diagnostics;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(any(test, target_os = "windows"))]

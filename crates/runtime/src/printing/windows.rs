@@ -1,3 +1,4 @@
+use super::diagnostics::record;
 use super::{
     submitted_at_rfc3339, sumatra_print_settings,
     windows_buffer::{read_buffer, BufferRead},
@@ -5,6 +6,7 @@ use super::{
     PrintResult, PrintSubmission, PrintTrackingOutcome, PrinterInfo, RawPrintOptions,
 };
 use serde::Deserialize;
+use serde_json::json;
 use std::{
     ffi::OsStr,
     os::windows::{ffi::OsStrExt, process::CommandExt},
@@ -82,17 +84,68 @@ impl PrintBackend for WindowsPrintBackend {
 
     /// 按任务尺寸选择驱动纸型，使用明确的份数和内容方向发送 PDF。
     fn print_pdf(&self, path: &Path, options: &PrintOptions) -> PrintResult<PrintSubmission> {
-        let papers = self.list_papers(&options.printer_name)?;
-        let settings = sumatra_print_settings(options.copies, &options.paper, &papers)?;
+        let operation = uuid::Uuid::new_v4().to_string();
+        record(
+            &operation,
+            &options.printer_name,
+            "print_request",
+            json!({
+                "width_mm": options.paper.width_mm, "height_mm": options.paper.height_mm,
+                "copies": options.copies,
+            }),
+        );
+        let papers = self
+            .list_papers(&options.printer_name)
+            .inspect_err(|error| {
+                record(
+                    &operation,
+                    &options.printer_name,
+                    "paper_lookup_failed",
+                    json!({"error": error.to_string()}),
+                );
+            })?;
+        let settings = sumatra_print_settings(options.copies, &options.paper, &papers)
+            .inspect_err(|error| {
+                record(
+                    &operation,
+                    &options.printer_name,
+                    "paper_match_failed",
+                    json!({
+                        "error": error.to_string(), "available_papers": papers,
+                        "width_mm": options.paper.width_mm, "height_mm": options.paper.height_mm,
+                        "tolerance_mm": 0.1,
+                    }),
+                );
+            })?;
+        record(
+            &operation,
+            &options.printer_name,
+            "paper_matched",
+            json!({"settings": settings}),
+        );
         let output = hidden_command(&self.sumatra_path)
             .arg("-silent")
             .arg("-print-to")
             .arg(&options.printer_name)
             .arg("-print-settings")
-            .arg(settings)
+            .arg(&settings)
             .arg(path)
             .output()
+            .inspect_err(|error| {
+                record(
+                    &operation,
+                    &options.printer_name,
+                    "submission_failed",
+                    json!({"error": error.to_string()}),
+                );
+            })
             .map_err(|error| command_error("SumatraPDF.exe", error.to_string()))?;
+        record(
+            &operation,
+            &options.printer_name,
+            "submission_result",
+            json!({"success": output.status.success(), "exit_code": output.status.code()}),
+        );
 
         if output.status.success() {
             Ok(PrintSubmission {
@@ -136,21 +189,51 @@ impl PrintBackend for WindowsPrintBackend {
 
 /// 安全枚举表单，再验证驱动编号在 SumatraPDF 等效配置下的物理尺寸。
 fn read_driver_papers(printer_name: &str) -> PrintResult<Vec<PaperInfo>> {
+    let operation = uuid::Uuid::new_v4().to_string();
+    record(&operation, printer_name, "enumeration_started", json!({}));
     let name = wide_null(printer_name);
     let mut printer = PRINTER_HANDLE {
         Value: ptr::null_mut(),
     };
     if unsafe { OpenPrinterW(name.as_ptr(), &mut printer, ptr::null()) } == 0 {
-        return Err(command_error("OpenPrinterW", last_os_error()));
+        let error = command_error("OpenPrinterW", last_os_error());
+        record(
+            &operation,
+            printer_name,
+            "enumeration_failed",
+            json!({"error": error.to_string()}),
+        );
+        return Err(error);
     }
-    let result = read_validated_papers(printer, &name);
+    let result = read_validated_papers(printer, &name, &operation, printer_name);
     unsafe { ClosePrinter(printer) };
+    match &result {
+        Ok(papers) => record(
+            &operation,
+            printer_name,
+            "enumeration_completed",
+            json!({"papers": papers, "count": papers.len()}),
+        ),
+        Err(error) => record(
+            &operation,
+            printer_name,
+            "enumeration_failed",
+            json!({"error": error.to_string()}),
+        ),
+    }
     result
 }
 
 /// 对已打开的打印机读取表单，保留用户默认设置用于纸型编号的等效验证。
-fn read_validated_papers(printer: PRINTER_HANDLE, name: &[u16]) -> PrintResult<Vec<PaperInfo>> {
+fn read_validated_papers(
+    printer: PRINTER_HANDLE,
+    name: &[u16],
+    operation: &str,
+    printer_name: &str,
+) -> PrintResult<Vec<PaperInfo>> {
+    let trace = |stage: &str, details| record(operation, printer_name, stage, details);
     let default_mode = read_default_devmode(printer, name)?;
+    trace("default_devmode", devmode_summary(&default_mode));
     let (forms, count) = read_buffer("EnumFormsW", |buffer| {
         let mut needed = 0;
         let mut count = 0;
@@ -174,10 +257,19 @@ fn read_validated_papers(printer: PRINTER_HANDLE, name: &[u16]) -> PrintResult<V
     if count > forms.len() * 8 / std::mem::size_of::<FORM_INFO_1W>() {
         return Err(command_error("EnumFormsW", "invalid form count".into()));
     }
+    trace("forms_enumerated", json!({"count": count}));
     let mut papers = Vec::new();
     for index in 0..count {
         let form = unsafe { &*forms.as_ptr().cast::<FORM_INFO_1W>().add(index) };
+        trace(
+            "form_read",
+            json!({"index": index, "width_mm": f64::from(form.Size.cx) / 1000.0, "height_mm": f64::from(form.Size.cy) / 1000.0}),
+        );
         if form.Size.cx <= 0 || form.Size.cy <= 0 || form.pName.is_null() {
+            trace(
+                "form_rejected",
+                json!({"index": index, "reason": "invalid_dimensions_or_missing_name"}),
+            );
             continue;
         }
         let start = form.pName as usize;
@@ -189,17 +281,35 @@ fn read_validated_papers(printer: PRINTER_HANDLE, name: &[u16]) -> PrintResult<V
         let raw_name =
             unsafe { std::slice::from_raw_parts(form.pName, ((end - start) / 2).min(32)) };
         let Some(length) = raw_name.iter().position(|value| *value == 0) else {
+            trace(
+                "form_rejected",
+                json!({"index": index, "reason": "name_exceeds_devmode_capacity", "name_prefix": String::from_utf16_lossy(raw_name)}),
+            );
             continue;
         };
+        trace(
+            "form_name",
+            json!({"index": index, "name": String::from_utf16_lossy(&raw_name[..length])}),
+        );
         let mut candidate = default_mode.clone();
         let mode = unsafe { &mut *candidate.as_mut_ptr().cast::<DEVMODEW>() };
         mode.dmFormName.fill(0);
         mode.dmFormName[..length].copy_from_slice(&raw_name[..length]);
         mode.dmFields &= !(DM_PAPERSIZE | DM_PAPERWIDTH | DM_PAPERLENGTH);
         mode.dmFields |= DM_FORMNAME;
-        if !validate_devmode(printer, name, &mut candidate) {
+        let status = validate_devmode(printer, name, &mut candidate);
+        if status != 1 {
+            let error = last_os_error();
+            trace(
+                "form_rejected",
+                json!({"index": index, "reason": "form_name_validation_failed", "return_code": status, "last_os_error": error}),
+            );
             continue;
         }
+        trace(
+            "form_name_resolved",
+            json!({"index": index, "devmode": devmode_summary(&candidate)}),
+        );
         let kind = unsafe {
             (*candidate.as_ptr().cast::<DEVMODEW>())
                 .Anonymous1
@@ -211,6 +321,10 @@ fn read_validated_papers(printer: PRINTER_HANDLE, name: &[u16]) -> PrintResult<V
                 .iter()
                 .any(|paper: &PaperInfo| paper.id == kind.to_string())
         {
+            trace(
+                "form_rejected",
+                json!({"index": index, "kind": kind, "reason": if kind <= 0 {"invalid_paper_kind"} else {"duplicate_paper_kind"}}),
+            );
             continue;
         }
         // SumatraPDF 3.6.1 只覆盖默认 DEVMODE 的纸型编号，再交给驱动验证。
@@ -218,17 +332,42 @@ fn read_validated_papers(printer: PRINTER_HANDLE, name: &[u16]) -> PrintResult<V
         let mode = unsafe { &mut *effective.as_mut_ptr().cast::<DEVMODEW>() };
         mode.Anonymous1.Anonymous1.dmPaperSize = kind;
         mode.dmFields |= DM_PAPERSIZE;
-        if !validate_devmode(printer, name, &mut effective) {
+        let status = validate_devmode(printer, name, &mut effective);
+        if status != 1 {
+            let error = last_os_error();
+            trace(
+                "form_rejected",
+                json!({"index": index, "kind": kind, "reason": "paper_kind_validation_failed", "return_code": status, "last_os_error": error}),
+            );
             continue;
         }
-        let Some((width_mm, height_mm)) = physical_paper_size(name, &effective) else {
-            continue;
+        trace(
+            "paper_kind_resolved",
+            json!({"index": index, "requested_kind": kind, "devmode": devmode_summary(&effective)}),
+        );
+        let (width_mm, height_mm) = match physical_paper_size(name, &effective) {
+            Ok(size) => size,
+            Err(error) => {
+                trace(
+                    "form_rejected",
+                    json!({"index": index, "kind": kind, "reason": "physical_size_unavailable", "error": error.to_string()}),
+                );
+                continue;
+            }
         };
+        trace(
+            "physical_size",
+            json!({"index": index, "kind": kind, "width_mm": width_mm, "height_mm": height_mm}),
+        );
         let form_width = f64::from(form.Size.cx) / 1000.0;
         let form_height = f64::from(form.Size.cy) / 1000.0;
         let Some((width_mm, height_mm)) =
             windows_physical_paper_dimensions(form_width, form_height, width_mm, height_mm)
         else {
+            trace(
+                "form_rejected",
+                json!({"index": index, "kind": kind, "reason": "physical_size_mismatch", "form_width_mm": form_width, "form_height_mm": form_height, "physical_width_mm": width_mm, "physical_height_mm": height_mm}),
+            );
             continue;
         };
         papers.push(PaperInfo {
@@ -237,8 +376,43 @@ fn read_validated_papers(printer: PRINTER_HANDLE, name: &[u16]) -> PrintResult<V
             width_mm,
             height_mm,
         });
+        trace(
+            "form_accepted",
+            json!({"index": index, "paper": papers.last()}),
+        );
     }
     Ok(papers)
+}
+
+/// 仅提取公开选纸字段，不导出驱动私有字节或指针。
+fn devmode_summary(mode: &[u64]) -> serde_json::Value {
+    let mode = unsafe { &*mode.as_ptr().cast::<DEVMODEW>() };
+    let paper = unsafe { mode.Anonymous1.Anonymous1 };
+    let length = mode
+        .dmFormName
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(mode.dmFormName.len());
+    json!({"fields": mode.dmFields, "paper_kind": paper.dmPaperSize,
+        "paper_width_tenth_mm": paper.dmPaperWidth, "paper_length_tenth_mm": paper.dmPaperLength,
+        "orientation": paper.dmOrientation, "form_name": String::from_utf16_lossy(&mode.dmFormName[..length]),
+        "driver_version": mode.dmDriverVersion, "driver_extra_bytes": mode.dmDriverExtra})
+}
+
+/// 读取 Windows 版本、打印机驱动关联及驱动版本，不包含用户身份或凭据。
+pub(super) fn diagnostic_environment() -> PrintResult<serde_json::Value> {
+    let output = hidden_command("powershell").args([
+        "-NoProfile", "-Command",
+        "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; [PSCustomObject]@{ OS=(Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber); Printers=@(Get-Printer | Select-Object Name,DriverName); Drivers=@(Get-PrinterDriver | ForEach-Object { [PSCustomObject]@{ Name=$_.Name; Manufacturer=$_.Manufacturer; MajorVersion=$_.MajorVersion; FileVersion=if ($_.DriverPath -and (Test-Path -LiteralPath $_.DriverPath)) { [System.Diagnostics.FileVersionInfo]::GetVersionInfo($_.DriverPath).FileVersion } else { $null } } }) } | ConvertTo-Json -Depth 4",
+    ]).output().map_err(|error| command_error("powershell diagnostics", error.to_string()))?;
+    if !output.status.success() {
+        return Err(command_error(
+            "powershell diagnostics",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| command_error("powershell diagnostics JSON", error.to_string()))
 }
 
 /// 把带容量 Win32 查询的返回值转换为重试或失败结果。
@@ -330,7 +504,7 @@ fn read_default_devmode(printer: PRINTER_HANDLE, name: &[u16]) -> PrintResult<Ve
 }
 
 /// 在内存中让驱动验证完整 DEVMODE，不保存到打印机默认设置。
-fn validate_devmode(printer: PRINTER_HANDLE, name: &[u16], mode: &mut [u64]) -> bool {
+fn validate_devmode(printer: PRINTER_HANDLE, name: &[u16], mode: &mut [u64]) -> i32 {
     let pointer = mode.as_mut_ptr().cast::<DEVMODEW>();
     unsafe {
         DocumentPropertiesW(
@@ -340,12 +514,12 @@ fn validate_devmode(printer: PRINTER_HANDLE, name: &[u16], mode: &mut [u64]) -> 
             pointer,
             pointer,
             DM_IN_BUFFER | DM_OUT_BUFFER,
-        ) == 1
+        )
     }
 }
 
 /// 读取等效打印配置的物理页面毫米尺寸，不创建打印任务。
-fn physical_paper_size(name: &[u16], mode: &[u64]) -> Option<(f64, f64)> {
+fn physical_paper_size(name: &[u16], mode: &[u64]) -> PrintResult<(f64, f64)> {
     let dc = unsafe {
         CreateICW(
             ptr::null(),
@@ -355,7 +529,7 @@ fn physical_paper_size(name: &[u16], mode: &[u64]) -> Option<(f64, f64)> {
         )
     };
     if dc.is_null() {
-        return None;
+        return Err(command_error("CreateICW", last_os_error()));
     }
     let width = unsafe { GetDeviceCaps(dc, PHYSICALWIDTH as i32) };
     let height = unsafe { GetDeviceCaps(dc, PHYSICALHEIGHT as i32) };
@@ -363,9 +537,9 @@ fn physical_paper_size(name: &[u16], mode: &[u64]) -> Option<(f64, f64)> {
     let dpi_y = unsafe { GetDeviceCaps(dc, LOGPIXELSY as i32) };
     unsafe { DeleteDC(dc) };
     if width <= 0 || height <= 0 || dpi_x <= 0 || dpi_y <= 0 {
-        return None;
+        return Err(command_error("GetDeviceCaps", format!("invalid physical page: width={width}, height={height}, dpi_x={dpi_x}, dpi_y={dpi_y}")));
     }
-    Some((
+    Ok((
         f64::from(width) * 25.4 / f64::from(dpi_x),
         f64::from(height) * 25.4 / f64::from(dpi_y),
     ))

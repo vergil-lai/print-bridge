@@ -11,7 +11,8 @@ import {
   DialogRoot,
   DialogTitle,
 } from 'reka-ui';
-import { runDoctor } from '@/api';
+import { exportDiagnosticReport, runDoctor } from '@/api';
+import { save } from '@tauri-apps/plugin-dialog';
 import { groupDoctorChecks } from '@/doctor-display';
 import { Button } from '@/components/ui/button';
 import type { DoctorReport, DoctorStatus } from '@/types';
@@ -21,6 +22,9 @@ const emit = defineEmits<{ 'status-change': [needsAttention: boolean] }>();
 const { locale, t } = useI18n();
 
 const loading = ref(false);
+const exporting = ref(false);
+const exportMessage = ref('');
+const exportFailed = ref(false);
 const report = ref<DoctorReport | null>(null);
 const callFailed = ref(false);
 const completedAt = ref<Date | null>(null);
@@ -49,6 +53,27 @@ async function detect(): Promise<void> {
     emit('status-change', true);
   } finally {
     loading.value = false;
+  }
+}
+
+async function exportReport(): Promise<void> {
+  if (exporting.value) return;
+  exporting.value = true;
+  exportMessage.value = '';
+  exportFailed.value = false;
+  try {
+    const path = await save({
+      defaultPath: 'printbridge-diagnostics.json',
+      filters: [{ name: 'PrintBridge Diagnostics', extensions: ['json'] }],
+    });
+    if (!path) return;
+    await exportDiagnosticReport(path);
+    exportMessage.value = 'doctor.exported';
+  } catch {
+    exportFailed.value = true;
+    exportMessage.value = 'doctor.exportFailed';
+  } finally {
+    exporting.value = false;
   }
 }
 
@@ -158,11 +183,29 @@ function statusClasses(status: DoctorStatus): string {
         </div>
 
         <footer class="border-t p-4">
+          <p class="mb-3 text-xs text-muted-foreground">{{ t('doctor.exportHint') }}</p>
+          <p
+            v-if="exportMessage"
+            role="status"
+            class="mb-3 text-sm"
+            :class="{ 'text-destructive': exportFailed }"
+          >
+            {{ t(exportMessage) }}
+          </p>
+          <Button
+            data-testid="doctor-export"
+            variant="outline"
+            class="mb-2 w-full"
+            :disabled="loading || exporting"
+            @click="exportReport"
+          >
+            {{ t(exporting ? 'doctor.exporting' : 'doctor.exportReport') }}
+          </Button>
           <Button
             data-testid="doctor-retry"
             variant="outline"
             class="w-full"
-            :disabled="loading"
+            :disabled="loading || exporting"
             @click="detect"
           >
             <RefreshCw class="size-4" :class="{ 'animate-spin': loading }" />
